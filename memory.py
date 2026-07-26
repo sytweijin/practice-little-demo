@@ -214,6 +214,39 @@ def record_recall(card_id, difficulty):
     return get_card(card_id)
 
 
+# ---------- 批次/文件夹 ----------
+
+def list_batches():
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT batch_id, scene_type, source_date,
+                  COUNT(*) as card_count,
+                  MIN(created_at) as created_at
+           FROM cards
+           WHERE batch_id != '' AND status != 'deleted'
+           GROUP BY batch_id
+           ORDER BY created_at DESC"""
+    ).fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        conn2 = get_db()
+        first = conn2.execute(
+            "SELECT title FROM cards WHERE batch_id = ? AND status != 'deleted' ORDER BY id ASC LIMIT 1",
+            (r["batch_id"],)
+        ).fetchone()
+        conn2.close()
+        result.append({
+            "batch_id": r["batch_id"],
+            "scene_type": r["scene_type"],
+            "source_date": r["source_date"],
+            "card_count": r["card_count"],
+            "title": first["title"] if first else "未命名",
+            "created_at": r["created_at"],
+        })
+    return result
+
+
 # ---------- 认知账单 ----------
 
 def ledger_stats():
