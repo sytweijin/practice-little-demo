@@ -340,7 +340,7 @@ async function loadLedger() {
       '<div class="bar-track"><div class="bar-fill" style="width:' + (count / maxScene * 100) + "%;background:" + (colors[key] || "#525252") + '"></div></div>' +
       '<div class="bar-num">' + count + "</div></div>";
   }
-  html += '<button class="btn-primary" style="margin-top:16px" onclick="closeModal();setTimeout(()=>openEditModal(' + card.id + '),200)">编辑卡片</button></div>";
+  html += "</div>";
   grid.innerHTML = html;
 }
 
@@ -424,8 +424,9 @@ function openCardModal(card) {
   if (card.recall_enabled) {
     html += '<div class="modal-section"><div class="modal-section-label">复习状态</div><div class="modal-section-text">已复习 ' + (card.recall_count || 0) + " 次 · 下次复习：" + (card.next_recall || "待定") + "</div></div>";
   }
-  html += '<button class="btn-primary" style="margin-top:16px" onclick="closeModal();setTimeout(()=>openEditModal(' + card.id + '),200)">编辑卡片</button></div>";
-  body.innerHTML = html;
+  html += '<div style="display:flex;gap:8px;margin-top:16px">' +
+    '<button class="btn-primary" style="flex:1" onclick="closeModal();setTimeout(()=>{var c=cards.find(x=>x.id==' + card.id + ');if(c)openEditModal(c);},200)">编辑</button>' +
+    '<button class="btn-primary" style="flex:0;background:var(--rose);border:none;padding:12px 20px" onclick="deleteCard(' + card.id + ')">删除</button></div></div>";
   document.getElementById("cardModal").classList.add("show");
 }
 
