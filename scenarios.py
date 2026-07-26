@@ -1,4 +1,4 @@
-"""场景模板 —— 每个场景驱动不同的 AI 提示词、卡片模板和回忆开关。"""
+﻿"""场景模板 —— 每个场景驱动不同的 AI 提示词、卡片模板和回忆开关。"""
 
 SCENARIOS = {
     "museum": {
@@ -15,7 +15,7 @@ SCENARIOS = {
         "key": "enterprise",
         "name": "企业参访",
         "icon": "building-2",
-        "recall_enabled": True,
+        "recall_enabled": False,
         "focus_prompt": "企业的核心业务、技术亮点、竞争壁垒，以及对参访者的启发。提炼出真正值得长期记住的洞察，而非宣传话术。",
         "card_hint": "一个核心洞察 + 客观事实 + 个人启发",
         "minutes_per_material": 8,
@@ -25,7 +25,7 @@ SCENARIOS = {
         "key": "meeting",
         "name": "会议 / 讨论",
         "icon": "users",
-        "recall_enabled": True,
+        "recall_enabled": False,
         "focus_prompt": "议题、关键决议、行动项、不同立场，以及我自己的判断。避免流水账，只留有决策价值的内容。",
         "card_hint": "一个议题 + 决议/行动项 + 我的立场",
         "minutes_per_material": 6,
@@ -35,7 +35,7 @@ SCENARIOS = {
         "key": "class",
         "name": "课程 / 讲座",
         "icon": "book-open",
-        "recall_enabled": True,
+        "recall_enabled": False,
         "focus_prompt": "核心知识点、关键例题、易错点、与已有知识的联系。按知识点而非按时间整理。",
         "card_hint": "一个知识点 + 简明解释 + 易错/联系",
         "minutes_per_material": 5,

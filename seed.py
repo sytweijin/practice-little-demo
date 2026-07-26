@@ -1,4 +1,4 @@
-"""Seed real visit data - makes the demo feel authentic."""
+﻿"""Seed real visit data - makes the demo feel authentic."""
 
 import memory
 from datetime import datetime, timedelta
@@ -14,7 +14,7 @@ SEED_CARDS = [
         "source_ref": "AMD\u4e0a\u6d77AI Lab\u53c2\u8bbf\u7b14\u8bb0",
         "tags": ["\u5f00\u6e90", "GPU", "AI\u7b97\u529b"],
         "source_date": "2026-07-15",
-        "recall_enabled": True,
+        "recall_enabled": False,
     },
     {
         "scene_type": "enterprise",
@@ -25,7 +25,7 @@ SEED_CARDS = [
         "source_ref": "AMD\u4e0a\u6d77AI Lab PPT\u622a\u56fe",
         "tags": ["\u786c\u4ef6", "\u6027\u4ef7\u6bd4", "\u63a8\u7406"],
         "source_date": "2026-07-15",
-        "recall_enabled": True,
+        "recall_enabled": False,
     },
     # ===== SenseTime =====
     {
@@ -37,7 +37,7 @@ SEED_CARDS = [
         "source_ref": "\u5546\u6c64\u79d1\u6280\u53c2\u8bbf\u7b14\u8bb0",
         "tags": ["\u8ba1\u7b97\u673a\u89c6\u89c9", "\u5927\u6a21\u578b", "\u4ea7\u4e1a\u843d\u5730"],
         "source_date": "2026-07-16",
-        "recall_enabled": True,
+        "recall_enabled": False,
     },
     {
         "scene_type": "enterprise",
@@ -48,7 +48,7 @@ SEED_CARDS = [
         "source_ref": "\u5546\u6c64\u79d1\u6280\u6f14\u793a\u533a",
         "tags": ["\u667a\u6167\u57ce\u5e02", "\u89c6\u89c9AI", "\u9690\u79c1"],
         "source_date": "2026-07-16",
-        "recall_enabled": True,
+        "recall_enabled": False,
     },
     # ===== Alibaba Cloud =====
     {
@@ -60,7 +60,7 @@ SEED_CARDS = [
         "source_ref": "\u963f\u91cc\u4e91\u4e91\u8c37\u4e2d\u5fc3\u53c2\u8bbf",
         "tags": ["\u4e91\u8ba1\u7b97", "\u901a\u4e49\u5343\u95ee", "\u5f00\u6e90"],
         "source_date": "2026-07-22",
-        "recall_enabled": True,
+        "recall_enabled": False,
     },
     {
         "scene_type": "enterprise",
@@ -71,7 +71,7 @@ SEED_CARDS = [
         "source_ref": "\u963f\u91cc\u4e91\u4e91\u8c37\u4e2d\u5fc3\u6280\u672f\u5c55\u5385",
         "tags": ["\u98de\u5929", "\u4e91\u539f\u751f", "\u57fa\u7840\u8bbe\u65bd"],
         "source_date": "2026-07-22",
-        "recall_enabled": True,
+        "recall_enabled": False,
     },
     # ===== BrainCo =====
     {
@@ -83,7 +83,7 @@ SEED_CARDS = [
         "source_ref": "\u5f3a\u8111\u79d1\u6280\u53c2\u8bbf\u7b14\u8bb0",
         "tags": ["\u8111\u673a\u63a5\u53e3", "\u79d1\u6280\u5411\u5584", "\u4eba\u672c\u5173\u6000"],
         "source_date": "2026-07-23",
-        "recall_enabled": True,
+        "recall_enabled": False,
     },
     {
         "scene_type": "enterprise",
@@ -94,7 +94,7 @@ SEED_CARDS = [
         "source_ref": "\u5f3a\u8111\u79d1\u6280\u6280\u672f\u4ea4\u6d41",
         "tags": ["BCI", "\u5de5\u7a0b\u6743\u8861", "\u4ea7\u54c1\u5316"],
         "source_date": "2026-07-23",
-        "recall_enabled": True,
+        "recall_enabled": False,
     },
     # ===== ZJU =====
     {
@@ -106,7 +106,7 @@ SEED_CARDS = [
         "source_ref": "\u6d59\u6c5f\u5927\u5b66\u53c2\u8bbf\u7b14\u8bb0",
         "tags": ["\u5b66\u672f\u7814\u7a76", "\u4ea7\u5b66\u7814", "AI\u524d\u6cbf"],
         "source_date": "2026-07-24",
-        "recall_enabled": True,
+        "recall_enabled": False,
     },
     # ===== Non-heritage Museum (today) =====
     {
