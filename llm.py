@@ -1,6 +1,8 @@
 """LLM integration - Qwen-VL / OpenAI compatible, with fallback to pre-generated mode."""
 
 import os
+import urllib.parse
+import time
 import base64
 import json
 import httpx
@@ -20,7 +22,17 @@ def _has_openai_key():
 
 
 def save_upload(filename, content_bytes):
-    safe = Path(filename).name.replace(" ", "_")
+    # URL-decode the filename (browsers may URL-encode Chinese characters)
+    raw = urllib.parse.unquote(filename)
+    # Keep only safe filename characters
+    safe = re.sub(r"[^a-zA-Z0-9._\-一-鿿]", "", Path(raw).name).replace(" ", "_")
+    if not safe:
+        safe = "upload_" + str(int(time.time()))
+    # Add timestamp to prevent collisions
+    ts = str(int(time.time()))
+    name_parts = Path(safe).stem[:40]
+    ext = Path(safe).suffix
+    safe = name_parts + "_" + ts + ext
     path = UPLOAD_DIR / safe
     path.write_bytes(content_bytes)
     return f"/static/uploads/{safe}"

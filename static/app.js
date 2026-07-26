@@ -139,6 +139,7 @@ function renderDraftCards(drafts, minutes) {
   let html = '<div style="font-size:13px;color:var(--ink-faint);margin-bottom:12px">AI 筛选出 ' + drafts.length + " 条值得留存的内容 · 预估节省 " + minutes + " 分钟整理时间</div>";
   html += drafts.map(c =>
     '<div class="draft-card" data-id="' + c.id + '">' +
+    (c.image_url ? '<img style="width:100%;height:120px;object-fit:cover;border-radius:6px;margin-bottom:8px" src="' + c.image_url + '" alt="">' : "") + 
     '<div class="dc-title">' + esc(c.title) + "</div>" +
     '<div class="dc-summary">' + esc(c.summary) + "</div>" +
     '<div class="dc-personal">' + esc(c.personal) + "</div>" +
@@ -273,7 +274,7 @@ async function loadLedger() {
       '<div class="bar-track"><div class="bar-fill" style="width:' + (count / maxScene * 100) + "%;background:" + (colors[key] || "#525252") + '"></div></div>' +
       '<div class="bar-num">' + count + "</div></div>";
   }
-  html += "</div>";
+  html += '<button class="btn-primary" style="margin-top:16px" onclick="closeModal();setTimeout(()=>openEditModal(' + card.id + '),200)">编辑卡片</button></div>";
   grid.innerHTML = html;
 }
 
@@ -357,7 +358,7 @@ function openCardModal(card) {
   if (card.recall_enabled) {
     html += '<div class="modal-section"><div class="modal-section-label">复习状态</div><div class="modal-section-text">已复习 ' + (card.recall_count || 0) + " 次 · 下次复习：" + (card.next_recall || "待定") + "</div></div>";
   }
-  html += "</div>";
+  html += '<button class="btn-primary" style="margin-top:16px" onclick="closeModal();setTimeout(()=>openEditModal(' + card.id + '),200)">编辑卡片</button></div>";
   body.innerHTML = html;
   document.getElementById("cardModal").classList.add("show");
 }
@@ -373,6 +374,9 @@ function openEditModal(card) {
     '<textarea class="notes-input" id="editSummary" rows="3">' + escAttr(card.summary) + "</textarea></div>" +
     '<div class="modal-section"><div class="modal-section-label">个人归因</div>' +
     '<textarea class="notes-input" id="editPersonal" rows="2">' + escAttr(card.personal) + "</textarea></div>" +
+    '<div class="modal-section"><div class="modal-section-label">标签</div>' +
+    '<input class="personalization-input" id="editTags" value="' + escAttr((card.tags || []).join(", ")) + '" placeholder="多个标签用逗号分隔">' +
+    '</div>' +
     '<div class="modal-section"><div class="modal-section-label">回忆</div>' +
     '<span class="recall-toggle ' + (card.recall_enabled ? "on" : "") + '" id="editRecallToggle"><span class="recall-switch"></span><span>' + (card.recall_enabled ? '已开启' : '点击开启') + '</span></span></div>' +
     '<button class="btn-primary" id="saveEdit">保存</button>' +
@@ -394,6 +398,7 @@ function openEditModal(card) {
         title: document.getElementById("editTitle").value,
         summary: document.getElementById("editSummary").value,
         personal: document.getElementById("editPersonal").value,
+        tags: (document.getElementById("editTags").value || "").split(",").map(t => t.trim()).filter(t => t),
         status: "confirmed"
       })
     });
