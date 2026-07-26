@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>在场 — AI 记忆工坊</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;900&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<!-- ===== NAV ===== -->
+<nav class="nav">
+  <div class="nav-brand">
+    <span class="nav-logo">在场</span>
+    <span class="nav-sub">Presence</span>
+  </div>
+  <div class="nav-links">
+    <a href="#thesis">主张</a>
+    <a href="#demo">体验</a>
+    <a href="#about">说明</a>
+  </div>
+</nav>
+
+<!-- ===== HERO ===== -->
+<header class="hero">
+  <div class="hero-bg"></div>
+  <div class="hero-content">
+    <p class="hero-eyebrow">AI + 智能认知 · 沪杭实践</p>
+    <h1 class="hero-title">拍了，<br>不等于记住了。</h1>
+    <p class="hero-lead">
+      你举起手机录下讲解，眼睛就没在看展品。<br>
+      你忙着记 PPT，耳朵就没在听内容。<br>
+      <strong>用于"记住"的工具，恰恰在摧毁你的在场感。</strong>
+    </p>
+    <p class="hero-thesis">
+      在场接管"记"的负担，<br>
+      把你还给当下。
+    </p>
+    <a href="#demo" class="hero-cta">开始体验 →</a>
+  </div>
+  <div class="hero-scroll">向下滚动</div>
+</header>
+
+<!-- ===== THESIS ===== -->
+<section class="thesis" id="thesis">
+  <div class="container">
+    <div class="section-label">核心主张</div>
+    <h2 class="section-title">人负责在场，AI 负责记住</h2>
+
+    <div class="thesis-grid">
+      <div class="thesis-card thesis-problem">
+        <div class="thesis-icon">📉</div>
+        <h3>问题</h3>
+        <p>人的工作记忆容量仅 <strong>4±1 个组块</strong>。逛完一座博物馆，认真看前 5 件展品，后面全部走马观花，走出馆门只模糊记得 1-2 件。</p>
+        <p class="thesis-quote">"拍了 = 记住了"是一个幻觉。<br>真相是：<strong>拍了 = 归档即遗忘</strong>。</p>
+      </div>
+      <div class="thesis-card thesis-solution">
+        <div class="thesis-icon">🔄</div>
+        <h3>解法</h3>
+        <p>AI 接管素材的<strong>筛选、提炼、归档</strong>全流程。你只需要在场感受，结束后让 AI 帮你从一天的碎片中整理出"真正值得记住的东西"。</p>
+        <p class="thesis-quote">人提供方向（个性化输入），<br>AI 提供能力（筛选 + 提炼）。<br><strong>记忆卡片是人与 AI 共同完成的结果。</strong></p>
+      </div>
+      <div class="thesis-card thesis-recall">
+        <div class="thesis-icon">🧠</div>
+        <h3>不止于存</h3>
+        <p>光存不算"记住"。认知科学告诉我们：决定记忆留存的是<strong>提取</strong>，不是录入。</p>
+        <p>在场在需要时主动发起<strong>回忆挑战</strong>——按遗忘曲线（1天/3天/7天）测试你的提取能力，真正帮你记住。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== DEMO ===== -->
+<section class="demo" id="demo">
+  <div class="container">
+    <div class="section-label">交互体验</div>
+    <h2 class="section-title">从碎片到记忆</h2>
+
+    <div class="demo-tabs">
+      <button class="tab active" data-tab="capture">采集提炼</button>
+      <button class="tab" data-tab="library">记忆库</button>
+      <button class="tab" data-tab="ledger">认知账单</button>
+      <button class="tab" data-tab="recall">回忆挑战 <span class="tab-badge" id="recallBadge"></span></button>
+    </div>
+
+    <!-- TAB: Capture -->
+    <div class="tab-panel active" id="panel-capture">
+      <div class="capture-layout">
+        <div class="capture-left">
+          <div class="capture-step">
+            <span class="step-num">1</span>
+            <label>选择场景</label>
+            <div class="scenario-grid" id="scenarioGrid"></div>
+          </div>
+          <div class="capture-step">
+            <span class="step-num">2</span>
+            <label>上传素材（图片 / 录音 / 文字）</label>
+            <div class="upload-zone" id="uploadZone">
+              <div class="upload-prompt">
+                <span class="upload-icon">📎</span>
+                <span>点击或拖拽文件到此处</span>
+                <span class="upload-hint">支持 jpg / png / mp3 / wav / txt</span>
+              </div>
+              <input type="file" id="fileInput" multiple accept="image/*,audio/*,.txt">
+            </div>
+            <div class="file-list" id="fileList"></div>
+            <textarea id="notesInput" class="notes-input" placeholder="或直接输入文字备注、关键词、一句话感受…" rows="3"></textarea>
+          </div>
+          <div class="capture-step">
+            <span class="step-num">3</span>
+            <label>个性化方向 <span class="optional">（可选）</span></label>
+            <input type="text" id="personalizationInput" class="personalization-input" placeholder="例：今天我对脑机接口印象特别深，想重点记住这个">
+          </div>
+          <button class="btn-primary" id="analyzeBtn">生成记忆卡片 →</button>
+        </div>
+        <div class="capture-right">
+          <div class="capture-result-label">AI 提炼结果</div>
+          <div class="draft-cards" id="draftCards">
+            <div class="draft-empty">上传素材后，AI 将自动筛选值得留存的内容并生成记忆卡片</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB: Library -->
+    <div class="tab-panel" id="panel-library">
+      <div class="library-header">
+        <div class="library-filters" id="libraryFilters"></div>
+        <div class="library-count" id="libraryCount"></div>
+      </div>
+      <div class="card-grid" id="cardGrid"></div>
+    </div>
+
+    <!-- TAB: Ledger -->
+    <div class="tab-panel" id="panel-ledger">
+      <div class="ledger-grid" id="ledgerGrid">
+        <div class="ledger-loading">加载中…</div>
+      </div>
+    </div>
+
+    <!-- TAB: Recall -->
+    <div class="tab-panel" id="panel-recall">
+      <div class="recall-container" id="recallContainer">
+        <div class="recall-loading">加载中…</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== ABOUT ===== -->
+<section class="about" id="about">
+  <div class="container">
+    <div class="section-label">项目说明</div>
+
+    <div class="about-block">
+      <h3>项目介绍</h3>
+      <p>在场是一款 AI 驱动的个人记忆留存工具。在信息过载的日常场景中（逛展、参访、开会、上课、旅行），用户随手拍下的照片、录下的语音、敲下的文字，都可以导入工具。AI 自动判断哪些值得长期保存，以"记忆卡片"的形式归档，形成可回溯的个人记忆库。</p>
+      <p>本项目的核心思考是：在信息爆炸的时代，AI 不是用来替代人的记忆，而是接管"记"的负担，让人重新专注于"在场"。人提供方向和素材，AI 提供筛选与提炼能力。最终产出的记忆卡片，是人与 AI 共同完成的结果。</p>
+    </div>
+
+    <div class="about-block">
+      <h3>AI 使用披露</h3>
+      <div class="disclosure">
+        <div class="disclosure-item">
+          <h4>讨论层面</h4>
+          <p>使用 ChatGPT / DeepSeek / 通义千问讨论产品形态、交互逻辑、核心主张。前后共约 3-4 轮迭代，从最初的"记忆卡片工具"逐步深化为"在场 vs 记录"的认知悖论表达。</p>
+        </div>
+        <div class="disclosure-item">
+          <h4>制作层面</h4>
+          <p>网页框架由 AI 编程工具（Codex）生成。素材分析能力基于通义千问 Vision 多模态 API（图片理解）和 LLM 文本提炼。回忆调度算法基于艾宾浩斯遗忘曲线的间隔重复原理。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="about-block">
+      <h3>人员分工</h3>
+      <table class="division-table">
+        <thead>
+          <tr><th>环节</th><th>负责人</th><th>具体工作</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>素材采集</td><td>—</td><td>企业参访和文化场馆的实地素材采集（照片、录音、笔记）</td></tr>
+          <tr><td>网页开发</td><td>—</td><td>前端 HTML/CSS/JS + 后端 FastAPI 开发</td></tr>
+          <tr><td>AI 接口</td><td>—</td><td>通义千问 Vision API 调试、提示词优化、预生成回退</td></tr>
+          <tr><td>汇报准备</td><td>—</td><td>演示流程设计、讲稿撰写、现场 Q&A 准备</td></tr>
+        </tbody>
+      </table>
+      <p class="division-note">（请替换为实际成员姓名）</p>
+    </div>
+
+    <div class="about-block">
+      <h3>GitHub</h3>
+      <a href="#" class="github-link" id="githubLink">📦 仓库地址（请替换为实际链接）</a>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <p>在场 · AI 记忆工坊 · 沪杭实践 2026</p>
+  <p class="footer-sub">主题六：AI + 智能认知 — 用创意形式表达对人和 AI 关系的思考</p>
+</footer>
+
+<!-- ===== Card Modal ===== -->
+<div class="modal-overlay" id="cardModal">
+  <div class="modal-content">
+    <button class="modal-close" onclick="closeModal()">✕</button>
+    <div id="modalBody"></div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
