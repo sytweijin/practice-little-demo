@@ -427,6 +427,7 @@ function openCardModal(card) {
   html += '<div style="display:flex;gap:8px;margin-top:16px">' +
     '<button class="btn-primary" style="flex:1" onclick="closeModal();setTimeout(()=>{var c=cards.find(x=>x.id==' + card.id + ');if(c)openEditModal(c);},200)">编辑</button>' +
     '<button class="btn-primary" style="flex:0;background:var(--rose);border:none;padding:12px 20px" onclick="deleteCard(' + card.id + ')">删除</button></div></div>";
+  body.innerHTML = html;
   document.getElementById("cardModal").classList.add("show");
 }
 
