@@ -31,11 +31,6 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app_instance):
     memory.init_db()
-@app.get("/api/batches")
-def api_batches():
-    batches = memory.list_batches()
-    return {"batches": batches}
-
     seed_if_empty()
     yield
 
