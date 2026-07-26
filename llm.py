@@ -54,7 +54,7 @@ def _call_dashscope_vision(image_paths, text_content, scene_key, personalization
         content.append({"text": "Text notes:\n" + text_content})
     content.append({"text": "Analyze the above materials and generate memory cards per the system prompt."})
     body = {
-        "model": "qwen-vl-max",
+        "model": "qwen3.7-plus",
         "input": {"messages": [
             {"role": "system", "content": [{"text": sys_prompt}]},
             {"role": "user", "content": content},
@@ -73,7 +73,7 @@ def _call_dashscope_vision(image_paths, text_content, scene_key, personalization
 
 def _call_openai_vision(image_paths, text_content, scene_key, personalization):
     api_key = os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    base_url = os.getenv("OPENAI_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
     sys_prompt = _build_prompt(scene_key, personalization)
     content = [{"type": "text", "text": sys_prompt}]
     for img_path in image_paths:

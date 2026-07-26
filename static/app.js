@@ -143,6 +143,7 @@ function renderDraftCards(drafts, minutes) {
     '<div class="dc-summary">' + esc(c.summary) + "</div>" +
     '<div class="dc-personal">' + esc(c.personal) + "</div>" +
     '<div class="dc-tags">' + (c.tags || []).map(t => '<span class="dc-tag">' + esc(t) + "</span>").join("") + "</div>" +
+    '<div class="dc-recall-row"><span class="recall-toggle" data-id="' + c.id + '"><span class="recall-switch"></span><span>开启回忆</span></span></div>' +
     '<div class="dc-actions">' +
     '<button class="dc-btn confirm" data-id="' + c.id + '">确认保存</button>' +
     '<button class="dc-btn edit" data-id="' + c.id + '">编辑</button>' +
@@ -174,6 +175,14 @@ function renderDraftCards(drafts, minutes) {
     b.onclick = async () => {
       await api("/api/cards/" + b.dataset.id, { method: "DELETE" });
       b.closest(".draft-card").remove();
+    };
+  });
+  container.querySelectorAll(".recall-toggle").forEach(function(t) {
+    t.classList.toggle("on", false);
+    t.onclick = function(e) {
+      e.stopPropagation();
+      var on = !t.classList.contains("on");
+      toggleRecall(t.dataset.id, on, t);
     };
   });
 }
@@ -216,7 +225,7 @@ function renderLibrary() {
     let img = "";
     if (c.image_url) img = '<img class="mem-card-img" src="' + c.image_url + '" alt="">';
     let recall = "";
-    if (c.recall_enabled) recall = '<span class="mem-card-recall recall-on">复习 ' + (c.recall_count || 0) + "次</span>";
+    recall = '<span class="recall-toggle mem-recall-toggle ' + (c.recall_enabled ? "on" : "") + '" data-id="' + c.id + '"><span class="recall-switch"></span><span>' + (c.recall_enabled ? ("复习 " + (c.recall_count || 0)) : "开启回忆") + '</span></span>';
     return '<div class="mem-card" data-id="' + c.id + '">' +
       img +
       '<div class="mem-card-body">' +
@@ -233,6 +242,13 @@ function renderLibrary() {
     el.onclick = () => {
       const card = cards.find(c => c.id == el.dataset.id);
       openCardModal(card);
+    };
+  });
+  grid.querySelectorAll(".mem-recall-toggle").forEach(function(t) {
+    t.onclick = function(e) {
+      e.stopPropagation();
+      var on = !t.classList.contains("on");
+      toggleRecall(t.dataset.id, on, t);
     };
   });
 }
@@ -357,13 +373,24 @@ function openEditModal(card) {
     '<textarea class="notes-input" id="editSummary" rows="3">' + escAttr(card.summary) + "</textarea></div>" +
     '<div class="modal-section"><div class="modal-section-label">个人归因</div>' +
     '<textarea class="notes-input" id="editPersonal" rows="2">' + escAttr(card.personal) + "</textarea></div>" +
+    '<div class="modal-section"><div class="modal-section-label">回忆</div>' +
+    '<span class="recall-toggle ' + (card.recall_enabled ? "on" : "") + '" id="editRecallToggle"><span class="recall-switch"></span><span>' + (card.recall_enabled ? '已开启' : '点击开启') + '</span></span></div>' +
     '<button class="btn-primary" id="saveEdit">保存</button>' +
     "</div>";
   document.getElementById("cardModal").classList.add("show");
+  var editToggle = document.getElementById("editRecallToggle");
+  if (editToggle) {
+    editToggle.onclick = function() {
+      var on = !editToggle.classList.contains("on");
+      editToggle.classList.toggle("on", on);
+      editToggle.querySelector("span:last-child").textContent = on ? "已开启" : "点击开启";
+    };
+  }
   document.getElementById("saveEdit").onclick = async () => {
     await api("/api/cards/" + card.id, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        recall_enabled: !!document.getElementById("editRecallToggle") && document.getElementById("editRecallToggle").classList.contains("on"),
         title: document.getElementById("editTitle").value,
         summary: document.getElementById("editSummary").value,
         personal: document.getElementById("editPersonal").value,
@@ -393,4 +420,20 @@ function esc(s) {
 function escAttr(s) {
   if (!s) return "";
   return esc(s);
+}
+
+// ---- recall toggle (per-card, user choice) ----
+async function toggleRecall(cardId, on, el) {
+  await api("/api/cards/" + cardId, {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ recall_enabled: on })
+  });
+  if (el) {
+    el.classList.toggle("on", on);
+    var label = el.querySelector("span:last-child");
+    if (label) label.textContent = on ? "已开启回忆" : "开启回忆";
+  }
+  await loadCards();
+  await loadLedger();
+  await loadRecall();
 }

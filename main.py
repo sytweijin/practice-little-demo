@@ -19,7 +19,6 @@ import llm
 from scenarios import SCENARIO_LIST, get_scenario
 from seed import seed_if_empty
 
-app = FastAPI(title="Memory Cards API")
 
 STATIC_DIR = Path(__file__).parent / "static"
 STATIC_DIR.mkdir(exist_ok=True)
@@ -27,10 +26,15 @@ STATIC_DIR.mkdir(exist_ok=True)
 (STATIC_DIR / "assets").mkdir(exist_ok=True)
 
 
-@app.on_event("startup")
-def startup():
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app_instance):
     memory.init_db()
     seed_if_empty()
+    yield
+
+app = FastAPI(title="Memory Cards API", lifespan=lifespan)
 
 
 # ---- Scenarios ----
@@ -112,7 +116,7 @@ async def api_analyze(
     for cd in cards_data:
         cd["scene_type"] = scene_type
         cd["status"] = "draft"
-        cd["recall_enabled"] = scenario["recall_enabled"]
+        cd["recall_enabled"] = False
         cd["source_date"] = datetime.now().strftime("%Y-%m-%d")
         saved.append(memory.create_card(cd))
 
@@ -134,7 +138,7 @@ class ConfirmInput(BaseModel):
 def api_confirm_card(card_id: int, data: dict = None):
     updates = {"status": "confirmed"}
     if data:
-        for k in ("title", "summary", "personal", "tags"):
+        for k in ("title", "summary", "personal", "tags", "recall_enabled"):
             if data.get(k) is not None:
                 updates[k] = data[k]
     card = memory.update_card(card_id, updates)
@@ -175,4 +179,4 @@ def index():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)

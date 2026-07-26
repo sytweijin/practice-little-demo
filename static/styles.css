@@ -58,6 +58,7 @@ body {
 .hero {
   position: relative; min-height: 100vh;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 100px 24px 120px;
   text-align: center; overflow: hidden;
   background: var(--bg-dark); color: #F5F5F4;
 }
@@ -99,11 +100,11 @@ body {
   background: transparent; border: 1.5px solid var(--amber); border-radius: var(--radius);
   color: #FBBF24; text-decoration: none; font-size: 15px; font-weight: 500;
   transition: all .3s; opacity: 0;
-  animation: fadeUp .8s 1s forwards;
+  animation: fadeUp .8s 1s forwards; margin-bottom: 60px;
 }
 .hero-cta:hover { background: var(--amber); color: #fff; }
 .hero-scroll {
-  position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+  position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
   font-size: 12px; color: #78716C; letter-spacing: 2px; opacity: 0;
   animation: fadeUp .8s 1.2s forwards;
 }
@@ -114,6 +115,8 @@ body {
 
 /* ===== SECTIONS ===== */
 section { padding: 100px 0; }
+.about { padding: 60px 0 80px; }
+.about-block { margin-bottom: 36px; }
 .section-label {
   font-size: 13px; letter-spacing: 3px; text-transform: uppercase;
   color: var(--amber); margin-bottom: 12px; font-weight: 500;
@@ -398,16 +401,16 @@ section { padding: 100px 0; }
 
 /* ===== ABOUT ===== */
 .about { background: var(--bg); }
-.about-block { margin-bottom: 56px; }
+
 .about-block h3 {
-  font-family: var(--serif); font-size: 1.4rem; margin-bottom: 16px;
-  padding-bottom: 8px; border-bottom: 2px solid var(--line);
+  font-family: var(--serif); font-size: 1.15rem; margin-bottom: 12px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--line);
 }
-.about-block p { color: var(--ink-soft); margin-bottom: 12px; font-size: 14px; }
+.about-block p { color: var(--ink-soft); margin-bottom: 8px; font-size: 13.5px; }
 .about-block strong { color: var(--ink); }
 .disclosure { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 .disclosure-item {
-  background: var(--bg-card); padding: 24px; border-radius: var(--radius);
+  background: var(--bg-card); padding: 18px; border-radius: var(--radius);
   box-shadow: var(--shadow); border-left: 3px solid var(--amber);
 }
 .disclosure-item h4 { font-size: 15px; margin-bottom: 8px; }
@@ -468,3 +471,26 @@ section { padding: 100px 0; }
   .tab { white-space: nowrap; }
   section { padding: 60px 0; }
 }
+
+/* recall toggle */
+.recall-toggle {
+  display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+  font-size: 12px; color: var(--ink-soft); user-select: none;
+}
+.recall-switch {
+  position: relative; width: 36px; height: 20px; background: var(--line);
+  border-radius: 10px; transition: background .2s; flex-shrink: 0;
+}
+.recall-switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px; background: #fff; border-radius: 50%;
+  transition: transform .2s; box-shadow: 0 1px 2px rgba(0,0,0,.2);
+}
+.recall-toggle.on .recall-switch { background: var(--teal); }
+.recall-toggle.on .recall-switch::after { transform: translateX(16px); }
+.recall-toggle.on { color: var(--teal); }
+.dc-recall-row {
+  display: flex; align-items: center; gap: 12px; margin-top: 10px;
+  padding-top: 10px; border-top: 1px dashed var(--line);
+}
+.mem-recall-toggle { cursor: pointer; }

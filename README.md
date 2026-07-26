@@ -20,7 +20,7 @@ cp .env.example .env
 python main.py
 
 # 4. 打开浏览器
-# 访问 http://127.0.0.1:8000
+# 访问 http://127.0.0.1:8001
 ```
 
 ## 核心功能
