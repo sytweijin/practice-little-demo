@@ -36,6 +36,12 @@ async def lifespan(app_instance):
 
 app = FastAPI(title="Memory Cards API", lifespan=lifespan)
 
+@app.get("/api/batches")
+def api_batches():
+    batches = memory.list_batches()
+    return {"batches": batches}
+
+
 
 # ---- Scenarios ----
 @app.get("/api/scenarios")
