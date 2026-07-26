@@ -18,6 +18,11 @@ def get_db():
 
 def init_db():
     conn = get_db()
+    # Add batch_id column for existing databases
+    try:
+        conn.execute("ALTER TABLE cards ADD COLUMN batch_id TEXT DEFAULT ''")
+    except:
+        pass  # Column already exists
     conn.executescript("""
     CREATE TABLE IF NOT EXISTS cards (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,8 +111,8 @@ def create_card(data):
     cur = conn.execute(
         """INSERT INTO cards
            (scene_type, title, summary, personal, source_kind, source_ref,
-            image_url, tags, source_date, status, recall_enabled)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            image_url, tags, source_date, status, recall_enabled, batch_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             data.get("scene_type", "custom"),
             data["title"],
@@ -120,6 +125,7 @@ def create_card(data):
             data.get("source_date", datetime.now().strftime("%Y-%m-%d")),
             data.get("status", "confirmed"),
             int(data.get("recall_enabled", False)),
+            data.get("batch_id", ""),
         ),
     )
     conn.commit()

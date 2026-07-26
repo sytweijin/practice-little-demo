@@ -31,6 +31,11 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app_instance):
     memory.init_db()
+@app.get("/api/batches")
+def api_batches():
+    batches = memory.list_batches()
+    return {"batches": batches}
+
     seed_if_empty()
     yield
 
@@ -112,12 +117,14 @@ async def api_analyze(
     scenario = get_scenario(scene_type)
 
     # Save as draft cards
+    batch_id = str(int(datetime.now().timestamp()))
     saved = []
     for cd in cards_data:
         cd["scene_type"] = scene_type
         cd["status"] = "draft"
         cd["recall_enabled"] = False
         cd["source_date"] = datetime.now().strftime("%Y-%m-%d")
+        cd["batch_id"] = batch_id
         saved.append(memory.create_card(cd))
 
     # Record ledger

@@ -189,9 +189,14 @@ function renderDraftCards(drafts, minutes) {
 }
 
 // ---- Library ----
+var batches = [];
+var currentBatch = "all";
+
 async function loadCards() {
   const data = await api("/api/cards");
   cards = data.cards;
+  const batchData = await api("/api/batches");
+  batches = batchData.batches;
   renderFilters();
   renderLibrary();
 }
@@ -215,36 +220,97 @@ function renderFilters() {
 function renderLibrary() {
   const grid = document.getElementById("cardGrid");
   const count = document.getElementById("libraryCount");
-  const filtered = currentFilter === "all" ? cards : cards.filter(c => c.scene_type === currentFilter);
-  count.textContent = filtered.length + " 张卡片";
-  if (!filtered.length) {
-    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:60px;color:var(--ink-faint)">暂无记忆卡片</div>';
-    return;
+  let filtered;
+
+  if (currentFilter === "folders") {
+    // Folder view
+    count.textContent = batches.length + " 个文件夹";
+    if (!batches.length) {
+      grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:60px;color:var(--ink-faint)">暂无文件夹</div>';
+      return;
+    }
+    grid.innerHTML = batches.map(b => {
+      const batchCards = cards.filter(c => c.batch_id === b.batch_id && c.status !== "deleted");
+      const sName = (scenarios.find(s => s.key === b.scene_type) || {}).name || b.scene_type;
+      return '<div class="batch-folder">' +
+        '<div class="batch-header" data-batch="' + b.batch_id + '">' +
+        '<span class="batch-arrow">▶</span>' +
+        '<span class="batch-scene scene-' + b.scene_type + '" style="display:inline-block;font-size:11px;padding:2px 8px;border-radius:10px;margin:0 10px;font-weight:500">' + esc(sName) + '</span>' +
+        '<span class="batch-title">' + esc(b.title) + "</span>" +
+        '<span class="batch-meta">' + b.source_date + " · " + batchCards.length + " 张卡片</span>" +
+        "</div>" +
+        '<div class="batch-cards" id="batch-' + b.batch_id + '" style="display:none">' +
+        '<div class="card-grid">' +
+        batchCards.map(c => {
+          let img = "";
+          if (c.image_url) img = '<img class="mem-card-img" src="' + c.image_url + '" alt="">';
+          let recall = '<span class="recall-toggle mem-recall-toggle ' + (c.recall_enabled ? "on" : "") + '" data-id="' + c.id + '"><span class="recall-switch"></span><span>' + (c.recall_enabled ? ("复习 " + (c.recall_count || 0)) : "开启回忆") + '</span></span>';
+          return '<div class="mem-card" data-id="' + c.id + '">' +
+            img +
+            '<div class="mem-card-body">' +
+            '<span class="mem-card-scene scene-' + c.scene_type + '">' + esc(sName) + "</span>" +
+            '<div class="mem-card-title">' + esc(c.title) + "</div>" +
+            '<div class="mem-card-summary">' + esc(c.summary) + "</div>" +
+            (c.personal ? '<div class="mem-card-personal">' + esc(c.personal) + "</div>" : "") +
+            '<div class="mem-card-tags">' + (c.tags || []).map(t => '<span class="mem-card-tag">' + esc(t) + "</span>").join("") + "</div>" +
+            "</div>" +
+            '<div class="mem-card-footer"><span>' + (c.source_date || "") + "</span>" + recall + "</div>" +
+            "</div>";
+        }).join("") +
+        "</div></div></div>";
+    }).join("");
+
+    // Folder click toggle
+    grid.querySelectorAll(".batch-header").forEach(h => {
+      h.onclick = function(e) {
+        if (e.target.closest(".recall-toggle")) return;
+        const batchId = h.dataset.batch;
+        const cardsDiv = document.getElementById("batch-" + batchId);
+        const arrow = h.querySelector(".batch-arrow");
+        if (cardsDiv.style.display === "none") {
+          cardsDiv.style.display = "block";
+          if (arrow) arrow.textContent = "▼";
+        } else {
+          cardsDiv.style.display = "none";
+          if (arrow) arrow.textContent = "▶";
+        }
+      };
+    });
+  } else {
+    // Flat view
+    filtered = currentFilter === "all" ? cards : cards.filter(c => c.scene_type === currentFilter);
+    count.textContent = filtered.length + " 张卡片";
+    if (!filtered.length) {
+      grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:60px;color:var(--ink-faint)">暂无记忆卡片</div>';
+      return;
+    }
+    grid.innerHTML = filtered.map(c => {
+      const sName = (scenarios.find(s => s.key === c.scene_type) || {}).name || c.scene_type;
+      let img = "";
+      if (c.image_url) img = '<img class="mem-card-img" src="' + c.image_url + '" alt="">';
+      let recall = '<span class="recall-toggle mem-recall-toggle ' + (c.recall_enabled ? "on" : "") + '" data-id="' + c.id + '"><span class="recall-switch"></span><span>' + (c.recall_enabled ? ("复习 " + (c.recall_count || 0)) : "开启回忆") + '</span></span>';
+      return '<div class="mem-card" data-id="' + c.id + '">' +
+        img +
+        '<div class="mem-card-body">' +
+        '<span class="mem-card-scene scene-' + c.scene_type + '">' + esc(sName) + "</span>" +
+        '<div class="mem-card-title">' + esc(c.title) + "</div>" +
+        '<div class="mem-card-summary">' + esc(c.summary) + "</div>" +
+        (c.personal ? '<div class="mem-card-personal">' + esc(c.personal) + "</div>" : "") +
+        '<div class="mem-card-tags">' + (c.tags || []).map(t => '<span class="mem-card-tag">' + esc(t) + "</span>").join("") + "</div>" +
+        "</div>" +
+        '<div class="mem-card-footer"><span>' + (c.source_date || "") + "</span>" + recall + "</div>" +
+        "</div>";
+    }).join("");
   }
-  grid.innerHTML = filtered.map(c => {
-    const sName = (scenarios.find(s => s.key === c.scene_type) || {}).name || c.scene_type;
-    let img = "";
-    if (c.image_url) img = '<img class="mem-card-img" src="' + c.image_url + '" alt="">';
-    let recall = "";
-    recall = '<span class="recall-toggle mem-recall-toggle ' + (c.recall_enabled ? "on" : "") + '" data-id="' + c.id + '"><span class="recall-switch"></span><span>' + (c.recall_enabled ? ("复习 " + (c.recall_count || 0)) : "开启回忆") + '</span></span>';
-    return '<div class="mem-card" data-id="' + c.id + '">' +
-      img +
-      '<div class="mem-card-body">' +
-      '<span class="mem-card-scene scene-' + c.scene_type + '">' + esc(sName) + "</span>" +
-      '<div class="mem-card-title">' + esc(c.title) + "</div>" +
-      '<div class="mem-card-summary">' + esc(c.summary) + "</div>" +
-      (c.personal ? '<div class="mem-card-personal">' + esc(c.personal) + "</div>" : "") +
-      '<div class="mem-card-tags">' + (c.tags || []).map(t => '<span class="mem-card-tag">' + esc(t) + "</span>").join("") + "</div>" +
-      "</div>" +
-      '<div class="mem-card-footer"><span>' + (c.source_date || "") + "</span>" + recall + "</div>" +
-      "</div>";
-  }).join("");
+
+  // Card click
   grid.querySelectorAll(".mem-card").forEach(el => {
     el.onclick = () => {
       const card = cards.find(c => c.id == el.dataset.id);
       openCardModal(card);
     };
   });
+  // Recall toggle
   grid.querySelectorAll(".mem-recall-toggle").forEach(function(t) {
     t.onclick = function(e) {
       e.stopPropagation();
@@ -425,6 +491,16 @@ function esc(s) {
 function escAttr(s) {
   if (!s) return "";
   return esc(s);
+}
+
+// ---- Delete card ----
+async function deleteCard(cardId) {
+  if (!confirm("确定删除这张卡片吗？")) return;
+  await api("/api/cards/" + cardId, { method: "DELETE" });
+  closeModal();
+  await loadCards();
+  await loadLedger();
+  await loadRecall();
 }
 
 // ---- recall toggle (per-card, user choice) ----
