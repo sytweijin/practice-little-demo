@@ -1,0 +1,19 @@
+{
+  "id": "/",
+  "name": "在场 — AI 记忆工坊",
+  "short_name": "在场",
+  "description": "AI 驱动的个人记忆留存工具 — 人负责在场，AI 负责记住",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "background_color": "#1C1917",
+  "theme_color": "#B45309",
+  "lang": "zh-CN",
+  "orientation": "portrait-primary",
+  "categories": ["productivity", "education", "utilities"],
+  "icons": [
+    { "src": "/static/assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/static/assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

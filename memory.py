@@ -2,27 +2,54 @@
 
 import sqlite3
 import json
+import contextvars
 from datetime import datetime, timedelta
 from pathlib import Path
 
 DB_DIR = Path(__file__).parent / "data"
 DB_DIR.mkdir(exist_ok=True)
-DB_PATH = DB_DIR / "memory.db"
+
+_profile_var = contextvars.ContextVar("presence_profile", default="default")
 
 
-def get_db():
-    conn = sqlite3.connect(str(DB_PATH))
+def set_profile(name):
+    _profile_var.set((name or "default").strip() or "default")
+
+
+def current_profile():
+    return _profile_var.get()
+
+
+def _db_path():
+    name = current_profile()
+    if name == "default":
+        return DB_DIR / "memory.db"
+    return DB_DIR / ("memory_" + name + ".db")
+
+
+def _connect():
+    conn = sqlite3.connect(str(_db_path()))
     conn.row_factory = sqlite3.Row
     return conn
 
 
+def get_db():
+    if not _db_path().exists():
+        init_db()
+    return _connect()
+
+
 def init_db():
-    conn = get_db()
-    # Add batch_id column for existing databases
-    try:
-        conn.execute("ALTER TABLE cards ADD COLUMN batch_id TEXT DEFAULT ''")
-    except:
-        pass  # Column already exists
+    conn = _connect()
+    for migration in (
+        "ALTER TABLE cards ADD COLUMN batch_id TEXT DEFAULT ''",
+        "ALTER TABLE cards ADD COLUMN recall_seconds INTEGER DEFAULT 0",
+        "ALTER TABLE ledger ADD COLUMN ai_seconds REAL DEFAULT 0",
+    ):
+        try:
+            conn.execute(migration)
+        except Exception:
+            pass
     conn.executescript("""
     CREATE TABLE IF NOT EXISTS cards (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,6 +69,8 @@ def init_db():
         next_recall TEXT,
         recall_interval INTEGER DEFAULT 1,
         difficulty INTEGER DEFAULT 0,
+        batch_id TEXT DEFAULT '',
+        recall_seconds INTEGER DEFAULT 0,
         created_at TEXT DEFAULT (datetime('now','localtime'))
     );
     CREATE TABLE IF NOT EXISTS ledger (
@@ -51,11 +80,48 @@ def init_db():
         materials_count INTEGER DEFAULT 0,
         minutes_saved INTEGER DEFAULT 0,
         cards_generated INTEGER DEFAULT 0,
-        focus_pct INTEGER DEFAULT 94
+        focus_pct INTEGER DEFAULT 94,
+        ai_seconds REAL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS folders (
+        folder_id TEXT PRIMARY KEY,
+        name TEXT DEFAULT '',
+        scene_type TEXT DEFAULT 'custom',
+        source_date TEXT,
+        created_at TEXT DEFAULT (datetime('now','localtime')),
+        sort_order INTEGER DEFAULT 0
     );
     """)
     conn.commit()
+    _migrate_folders(conn)
     conn.close()
+
+
+def _migrate_folders(conn):
+    """Ensure every existing batch_id has a matching folders row."""
+    rows = conn.execute(
+        """SELECT DISTINCT batch_id FROM cards
+           WHERE batch_id != '' AND status != 'deleted'"""
+    ).fetchall()
+    for r in rows:
+        bid = r["batch_id"]
+        exists = conn.execute(
+            "SELECT folder_id FROM folders WHERE folder_id = ?", (bid,)
+        ).fetchone()
+        if not exists:
+            meta = conn.execute(
+                """SELECT scene_type, source_date, MIN(created_at) AS created_at
+                   FROM cards WHERE batch_id = ? AND status != 'deleted'
+                   ORDER BY id ASC LIMIT 1""",
+                (bid,),
+            ).fetchone()
+            conn.execute(
+                """INSERT INTO folders (folder_id, name, scene_type, source_date, created_at)
+                   VALUES (?,?,?,?,?)""",
+                (bid, "", meta["scene_type"] if meta else "custom",
+                 meta["source_date"] if meta else None, meta["created_at"] if meta else None),
+            )
+    conn.commit()
 
 
 def _row_to_card(row):
@@ -77,6 +143,7 @@ def _row_to_card(row):
         "next_recall": row["next_recall"],
         "recall_interval": row["recall_interval"],
         "difficulty": row["difficulty"],
+        "batch_id": row["batch_id"] if "batch_id" in row.keys() else "",
         "created_at": row["created_at"],
     }
 
@@ -131,7 +198,28 @@ def create_card(data):
     conn.commit()
     card_id = cur.lastrowid
     conn.close()
+    bid = data.get("batch_id", "")
+    if bid:
+        _ensure_folder(bid, data.get("scene_type", "custom"), data.get("source_date"))
     return get_card(card_id)
+
+
+def _ensure_folder(folder_id, scene_type, source_date=None):
+    """Create a folders row if it does not yet exist (idempotent)."""
+    conn = get_db()
+    exists = conn.execute(
+        "SELECT folder_id FROM folders WHERE folder_id = ?", (folder_id,)
+    ).fetchone()
+    if not exists:
+        conn.execute(
+            """INSERT INTO folders (folder_id, name, scene_type, source_date, created_at)
+               VALUES (?,?,?,?,?)""",
+            (folder_id, "", scene_type or "custom",
+             source_date or datetime.now().strftime("%Y-%m-%d"),
+             datetime.now().strftime("%Y-%m-%d %H:%M")),
+        )
+        conn.commit()
+    conn.close()
 
 
 def update_card(card_id, data):
@@ -189,8 +277,8 @@ def recall_due(scene_type=None):
     return [_row_to_card(r) for r in rows]
 
 
-def record_recall(card_id, difficulty):
-    """difficulty: 0=简单 1=中等 2=困难，影响下次间隔。"""
+def record_recall(card_id, difficulty, seconds=0):
+    """difficulty: 0=简单 1=中等 2=困难，影响下次间隔；seconds 记录本次回忆投入秒数。"""
     card = get_card(card_id)
     if not card:
         return None
@@ -205,9 +293,11 @@ def record_recall(card_id, difficulty):
     conn = get_db()
     conn.execute(
         """UPDATE cards SET last_recalled = ?, recall_count = ?,
-           next_recall = ?, recall_interval = ?, difficulty = ?
+           next_recall = ?, recall_interval = ?, difficulty = ?,
+           recall_seconds = recall_seconds + ?
            WHERE id = ?""",
-        (now, card["recall_count"] + 1, _next_recall_date(interval), interval, difficulty, card_id),
+        (now, card["recall_count"] + 1, _next_recall_date(interval), interval, difficulty,
+         max(0, int(seconds or 0)), card_id),
     )
     conn.commit()
     conn.close()
@@ -216,36 +306,151 @@ def record_recall(card_id, difficulty):
 
 # ---------- 批次/文件夹 ----------
 
-def list_batches():
+# ---------- Folders ----------
+
+def list_folders(include_unfiled=False):
+    """List all folders with card counts; title falls back to first card."""
     conn = get_db()
     rows = conn.execute(
-        """SELECT batch_id, scene_type, source_date,
-                  COUNT(*) as card_count,
-                  MIN(created_at) as created_at
-           FROM cards
-           WHERE batch_id != '' AND status != 'deleted'
-           GROUP BY batch_id
-           ORDER BY created_at DESC"""
+        """SELECT f.folder_id, f.name, f.scene_type, f.source_date, f.created_at,
+                  (SELECT COUNT(*) FROM cards c
+                   WHERE c.batch_id = f.folder_id AND c.status != 'deleted') AS card_count
+           FROM folders f
+           ORDER BY f.created_at DESC"""
     ).fetchall()
-    conn.close()
     result = []
     for r in rows:
-        conn2 = get_db()
-        first = conn2.execute(
+        first = conn.execute(
             "SELECT title FROM cards WHERE batch_id = ? AND status != 'deleted' ORDER BY id ASC LIMIT 1",
-            (r["batch_id"],)
+            (r["folder_id"],)
         ).fetchone()
-        conn2.close()
         result.append({
-            "batch_id": r["batch_id"],
+            "folder_id": r["folder_id"],
+            "batch_id": r["folder_id"],
+            "name": r["name"] or "",
             "scene_type": r["scene_type"],
             "source_date": r["source_date"],
             "card_count": r["card_count"],
-            "title": first["title"] if first else "未命名",
+            "title": r["name"] or (first["title"] if first else ""),
             "created_at": r["created_at"],
         })
+    result = [f for f in result if f["card_count"] > 0]
+    if include_unfiled:
+        unfiled = conn.execute(
+            """SELECT COUNT(*) AS c FROM cards
+               WHERE (batch_id IS NULL OR batch_id = '') AND status != 'deleted'"""
+        ).fetchone()["c"]
+        result.append({
+            "folder_id": "", "batch_id": "", "name": "", "scene_type": "custom",
+            "source_date": None, "card_count": unfiled, "title": "",
+            "created_at": None, "is_unfiled": True,
+        })
+    conn.close()
     return result
 
+
+def get_folder(folder_id):
+    conn = get_db()
+    r = conn.execute("SELECT * FROM folders WHERE folder_id = ?", (folder_id,)).fetchone()
+    conn.close()
+    if not r:
+        return None
+    return {"folder_id": r["folder_id"], "name": r["name"] or "",
+            "scene_type": r["scene_type"], "source_date": r["source_date"],
+            "created_at": r["created_at"]}
+
+
+def rename_folder(folder_id, name):
+    conn = get_db()
+    conn.execute("UPDATE folders SET name = ? WHERE folder_id = ?", (name, folder_id))
+    conn.commit()
+    conn.close()
+    return get_folder(folder_id)
+
+
+def delete_folder(folder_id, delete_cards=False):
+    conn = get_db()
+    if delete_cards:
+        conn.execute("UPDATE cards SET status = 'deleted' WHERE batch_id = ?", (folder_id,))
+    else:
+        conn.execute("UPDATE cards SET batch_id = '' WHERE batch_id = ?", (folder_id,))
+    conn.execute("DELETE FROM folders WHERE folder_id = ?", (folder_id,))
+    conn.commit()
+    conn.close()
+
+
+def merge_folders(source_id, target_id):
+    conn = get_db()
+    conn.execute("UPDATE cards SET batch_id = ? WHERE batch_id = ?", (target_id, source_id))
+    conn.execute("DELETE FROM folders WHERE folder_id = ?", (source_id,))
+    conn.commit()
+    conn.close()
+
+
+def batch_move_cards(card_ids, folder_id):
+    """Move many cards into one folder (creates the folder if missing)."""
+    conn = get_db()
+    if folder_id:
+        exists = conn.execute(
+            "SELECT folder_id FROM folders WHERE folder_id = ?", (folder_id,)
+        ).fetchone()
+        if not exists:
+            first = conn.execute(
+                "SELECT scene_type, source_date FROM cards WHERE id IN (%s) ORDER BY id ASC LIMIT 1"
+                % ",".join("?" * len(card_ids)), card_ids
+            ).fetchone()
+            if first:
+                conn.execute(
+                    """INSERT INTO folders (folder_id, name, scene_type, source_date, created_at)
+                       VALUES (?,?,?,?,?)""",
+                    (folder_id, "", first["scene_type"], first["source_date"],
+                     datetime.now().strftime("%Y-%m-%d %H:%M")),
+                )
+    placeholders = ",".join("?" * len(card_ids))
+    conn.execute(
+        "UPDATE cards SET batch_id = ? WHERE id IN (%s)" % placeholders,
+        [folder_id] + list(card_ids),
+    )
+    conn.commit()
+    conn.close()
+
+
+def batch_delete_cards(card_ids):
+    """Soft-delete many cards."""
+    if not card_ids:
+        return
+    conn = get_db()
+    placeholders = ",".join("?" * len(card_ids))
+    conn.execute(
+        "UPDATE cards SET status = 'deleted' WHERE id IN (%s)" % placeholders,
+        list(card_ids),
+    )
+    conn.commit()
+    conn.close()
+
+
+def move_card(card_id, folder_id):
+    conn = get_db()
+    if folder_id:
+        exists = conn.execute("SELECT folder_id FROM folders WHERE folder_id = ?", (folder_id,)).fetchone()
+        if not exists:
+            card = conn.execute("SELECT scene_type, source_date FROM cards WHERE id = ?", (card_id,)).fetchone()
+            if card:
+                conn.execute(
+                    """INSERT INTO folders (folder_id, name, scene_type, source_date, created_at)
+                       VALUES (?,?,?,?,?)""",
+                    (folder_id, "", card["scene_type"], card["source_date"],
+                     datetime.now().strftime("%Y-%m-%d %H:%M")),
+                )
+    conn.execute("UPDATE cards SET batch_id = ? WHERE id = ?", (folder_id, card_id))
+    conn.commit()
+    conn.close()
+    return get_card(card_id)
+
+
+def list_batches():
+    """Back-compat alias for older callers."""
+    return list_folders()
 
 # ---------- 认知账单 ----------
 
@@ -268,24 +473,250 @@ def ledger_stats():
         "SELECT COUNT(*) FROM cards WHERE recall_enabled=1 AND status='confirmed' AND (next_recall IS NULL OR next_recall <= ?)",
         (today,),
     ).fetchone()[0]
+    total_analysis_seconds = conn.execute("SELECT COALESCE(SUM(ai_seconds),0) FROM ledger").fetchone()[0]
+    total_recall_seconds = conn.execute("SELECT COALESCE(SUM(recall_seconds),0) FROM cards").fetchone()[0]
+    recall_sessions = conn.execute("SELECT COUNT(*) FROM cards WHERE recall_count > 0").fetchone()[0]
+    avg_difficulty = conn.execute("SELECT COALESCE(AVG(difficulty),0) FROM cards WHERE difficulty > 0").fetchone()[0]
     conn.close()
     return {
         "total_cards": total_cards,
         "by_scene": {r["scene_type"]: r["c"] for r in by_scene},
         "total_minutes_saved": total_minutes,
         "total_materials": total_materials,
+        "total_analysis_seconds": total_analysis_seconds,
+        "total_recall_seconds": total_recall_seconds,
         "recall_total": recall_total,
         "recall_done": recall_done,
+        "recall_sessions": recall_sessions,
+        "avg_difficulty": round(avg_difficulty, 2),
         "recall_due": due,
     }
 
 
-def record_ledger(scene_type, materials_count, minutes_saved, cards_generated):
+def record_ledger(scene_type, materials_count, minutes_saved, cards_generated, ai_seconds=0):
     conn = get_db()
     conn.execute(
-        """INSERT INTO ledger (date, scene_type, materials_count, minutes_saved, cards_generated)
-           VALUES (?,?,?,?,?)""",
-        (datetime.now().strftime("%Y-%m-%d"), scene_type, materials_count, minutes_saved, cards_generated),
+        """INSERT INTO ledger (date, scene_type, materials_count, minutes_saved, cards_generated, ai_seconds)
+           VALUES (?,?,?,?,?,?)""",
+        (datetime.now().strftime("%Y-%m-%d"), scene_type, materials_count, minutes_saved, cards_generated,
+         max(0.0, float(ai_seconds or 0))),
     )
     conn.commit()
     conn.close()
+
+
+# ========== 记忆联结 ==========
+
+def card_connections(card_id, limit=6):
+    """Find cards that share at least one tag with the target card.
+    Returns the most related cards plus the tags they share — the thin
+    threads that connect memories across scenes and time."""
+    target = get_card(card_id)
+    if not target:
+        return []
+    my_tags = set(target.get("tags") or [])
+    if not my_tags:
+        return []
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM cards WHERE status != 'deleted' AND id != ? ORDER BY created_at DESC",
+        (card_id,),
+    ).fetchall()
+    result = []
+    for r in rows:
+        tags = set(json.loads(r["tags"] or "[]"))
+        shared = my_tags & tags
+        if shared:
+            card = _row_to_card(r)
+            card["shared_tags"] = sorted(shared)
+            result.append(card)
+    conn.close()
+    # rank by number of shared tags, then recency
+    result.sort(key=lambda c: (-len(c["shared_tags"]), c["created_at"]), reverse=False)
+    return result[:limit]
+
+
+# ========== 全文搜索 ==========
+
+def search_cards(query, scene_type=None):
+    u"""Full-text search across title, summary, personal, tags, source_ref."""
+    conn = get_db()
+    terms = [t.strip() for t in query.split() if t.strip()]
+    if not terms:
+        return []
+    conditions = []
+    params = []
+    for term in terms:
+        like = "%%" + term + "%%"
+        conditions.append("(title LIKE ? OR summary LIKE ? OR personal LIKE ? OR tags LIKE ? OR source_ref LIKE ?)")
+        params.extend([like, like, like, like, like])
+    sql = "SELECT * FROM cards WHERE status != 'deleted' AND " + " AND ".join(conditions)
+    if scene_type:
+        sql += " AND scene_type = ?"
+        params.append(scene_type)
+    sql += " ORDER BY created_at DESC"
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+    return [_row_to_card(r) for r in rows]
+
+
+# ========== 导出 / 导入 ==========
+
+def export_cards_data():
+    u"""Return all non-deleted cards as a list of dicts (for JSON export)."""
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM cards WHERE status != 'deleted' ORDER BY created_at DESC").fetchall()
+    conn.close()
+    return [_row_to_card(r) for r in rows]
+
+
+def import_cards(cards_list, merge=False):
+    u"""Import cards from a list of dicts. If merge=True, skip existing by title+source_date match."""
+    imported = 0
+    skipped = 0
+    conn = get_db()
+    for cd in cards_list:
+        title = cd.get("title", "")
+        source_date = cd.get("source_date", "")
+        if merge:
+            existing = conn.execute(
+                "SELECT id FROM cards WHERE title = ? AND source_date = ? AND status != 'deleted'",
+                (title, source_date),
+            ).fetchone()
+            if existing:
+                skipped += 1
+                continue
+        conn.execute(
+            """INSERT INTO cards
+               (scene_type, title, summary, personal, source_kind, source_ref,
+                image_url, tags, source_date, status, recall_enabled, batch_id, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                cd.get("scene_type", "custom"),
+                title,
+                cd.get("summary", ""),
+                cd.get("personal", ""),
+                cd.get("source_kind", "text"),
+                cd.get("source_ref", ""),
+                cd.get("image_url", ""),
+                json.dumps(cd.get("tags", []), ensure_ascii=False),
+                source_date or datetime.now().strftime("%Y-%m-%d"),
+                cd.get("status", "confirmed"),
+                int(cd.get("recall_enabled", False)),
+                cd.get("batch_id", ""),
+                cd.get("created_at") or datetime.now().strftime("%Y-%m-%d %H:%M"),
+            ),
+        )
+        imported += 1
+    conn.commit()
+    conn.close()
+    return imported, skipped
+
+
+# ========== 多档案 / 记忆图谱 ==========
+
+def list_profiles():
+    """扫描 data 目录，返回所有可用档案（default 与 memory_*.db）。"""
+    names = ["default"]
+    for f in sorted(DB_DIR.glob("memory_*.db")):
+        names.append(f.stem[len("memory_"):])
+    result = []
+    for name in names:
+        token = _profile_var.set(name)
+        conn = _connect()
+        try:
+            total = conn.execute("SELECT COUNT(*) FROM cards WHERE status != 'deleted'").fetchone()[0]
+        except Exception:
+            total = 0
+        conn.close()
+        _profile_var.reset(token)
+        result.append({"name": name, "card_count": total})
+    return result
+
+
+def graph_data(limit=200):
+    """返回卡片-标签二部图数据，供前端绘制记忆图谱。"""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, title, scene_type, tags, source_date FROM cards "
+        "WHERE status != 'deleted' ORDER BY created_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    cards = []
+    tag_nodes = {}
+    links = []
+    for r in rows:
+        tags = json.loads(r["tags"] or "[]")
+        cid = "card-" + str(r["id"])
+        cards.append({
+            "id": cid,
+            "card_id": r["id"],
+            "title": r["title"],
+            "scene_type": r["scene_type"],
+            "source_date": r["source_date"],
+            "tags": tags,
+        })
+        for t in tags:
+            tid = "tag-" + t
+            if tid not in tag_nodes:
+                tag_nodes[tid] = {"id": tid, "name": t, "count": 0}
+            tag_nodes[tid]["count"] += 1
+            links.append({"source": cid, "target": tid})
+    return {
+        "cards": cards,
+        "tags": sorted(tag_nodes.values(), key=lambda n: -n["count"]),
+        "links": links,
+    }
+
+
+# ========== 标签管理 ==========
+
+def list_all_tags():
+    u"""Return all unique tags with card count, sorted by count desc."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT tags FROM cards WHERE status != 'deleted' AND tags != '[]'"
+    ).fetchall()
+    tag_counts = {}
+    for r in rows:
+        try:
+            for t in json.loads(r["tags"] or "[]"):
+                tag_counts[t] = tag_counts.get(t, 0) + 1
+        except (json.JSONDecodeError, TypeError):
+            pass
+    conn.close()
+    return sorted([{"name": k, "count": v} for k, v in tag_counts.items()], key=lambda x: -x["count"])
+
+
+def rename_tag(old_tag, new_tag):
+    u"""Rename a tag in all cards. new_tag='' removes the tag."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, tags FROM cards WHERE status != 'deleted' AND tags LIKE ?",
+        ("%%" + old_tag + "%%",),
+    ).fetchall()
+    updated = 0
+    for r in rows:
+        try:
+            tags = json.loads(r["tags"] or "[]")
+            changed = False
+            new_tags = []
+            for t in tags:
+                if t == old_tag:
+                    changed = True
+                    if new_tag:
+                        new_tags.append(new_tag)
+                else:
+                    new_tags.append(t)
+            if changed:
+                conn.execute(
+                    "UPDATE cards SET tags = ? WHERE id = ?",
+                    (json.dumps(new_tags, ensure_ascii=False), r["id"]),
+                )
+                updated += 1
+        except (json.JSONDecodeError, TypeError):
+            pass
+    conn.commit()
+    conn.close()
+    return updated

@@ -1,6 +1,7 @@
 """LLM integration - Qwen-VL / OpenAI compatible, with fallback to pre-generated mode."""
 
 import os
+import re
 import urllib.parse
 import time
 import base64
@@ -38,6 +39,48 @@ def save_upload(filename, content_bytes):
     return f"/static/uploads/{safe}"
 
 
+def _transcribe_audio(audio_url):
+    """Transcribe an uploaded audio file to text via DashScope Paraformer / OpenAI Whisper.
+    Returns "" when no key is configured or the call fails."""
+    full = Path(__file__).parent / audio_url.lstrip("/")
+    if not full.exists():
+        return ""
+    try:
+        if _has_dashscope_key():
+            api_key = os.getenv("DASHSCOPE_API_KEY")
+            url = "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription"
+            # Paraformer file-based async transcription is complex; use the synchronous
+            # multimodal recognition endpoint which accepts base64 audio inline.
+            import base64 as _b64
+            b64 = _b64.b64encode(full.read_bytes()).decode()
+            suffix = full.suffix.lower().lstrip(".") or "wav"
+            mime = {"mp3": "audio/mpeg", "wav": "audio/wav", "m4a": "audio/mp4",
+                    "ogg": "audio/ogg", "aac": "audio/aac", "flac": "audio/flac"}.get(suffix, "audio/wav")
+            body = {
+                "model": "paraformer-v2",
+                "input": {"file": "data:" + mime + ";base64," + b64},
+                "parameters": {"result_format": "text"},
+            }
+            r = httpx.post(url, json=body, headers={"Authorization": "Bearer " + api_key}, timeout=120)
+            r.raise_for_status()
+            data = r.json()
+            out = data.get("output", {}).get("text") or data.get("text") or ""
+            return str(out).strip()
+        # OpenAI-compatible Whisper fallback
+        if _has_openai_key():
+            api_key = os.getenv("OPENAI_API_KEY")
+            base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+            with full.open("rb") as fh:
+                files = {"file": (full.name, fh, "application/octet-stream")}
+                r = httpx.post(base_url + "/audio/transcriptions", headers={"Authorization": "Bearer " + api_key},
+                               files=files, data={"model": "whisper-1"}, timeout=120)
+            r.raise_for_status()
+            return str(r.json().get("text", "")).strip()
+    except Exception as e:
+        print("[ASR] transcription failed for " + audio_url + ": " + str(e))
+    return ""
+
+
 def _build_prompt(scene_key, personalization):
     scenario = get_scenario(scene_key)
     parts = []
@@ -47,9 +90,9 @@ def _build_prompt(scene_key, personalization):
     if personalization:
         parts.append("User note: " + personalization + " - prioritize content matching the user's stated direction.")
     parts.append("Scene focus: " + scenario["focus_prompt"])
-    parts.append("For each card generate: title (one-line objective summary), summary (2-3 sentence description), personal (one sentence on why it matters to the user), tags (2-3).")
+    parts.append("For each card generate: title (one-line objective summary), summary (2-3 sentence description), tags (2-3). Do NOT generate a personal-attribution field; that is reserved for the user.")
     parts.append("Return only cards worth keeping, count is flexible.")
-    parts.append('Return strictly as JSON: {"cards": [{"title":"...","summary":"...","personal":"...","tags":["..."]}]}')
+    parts.append('Return strictly as JSON: {"cards": [{"title":"...","summary":"...","tags":["..."]}]}')
     return "\n".join(parts)
 
 
@@ -125,7 +168,7 @@ def _fallback_generate(materials, scene_key, personalization):
         kind = m.get("kind", "text")
         ref = m.get("ref", "")
         name = m.get("name", "material" + str(i + 1))
-        if kind == "image":
+        if kind in ("image", "video"):
             title = "图像记录：" + Path(name).stem
             summary = "用户在「" + scenario["name"] + "」场景中拍摄的照片。"
             tags = [scenario["name"][:2], "图像"]
@@ -137,7 +180,7 @@ def _fallback_generate(materials, scene_key, personalization):
             title = ref[:40] if len(ref) > 40 else (ref or "备注 " + str(i + 1))
             summary = ref
             tags = [scenario["name"][:2], "文字"]
-        personal = personalization or "——（可在确认时编辑个人感受）"
+        personal = ""  # reserved for the user; AI never fills personal attribution
         cards.append({
             "title": title, "summary": summary, "personal": personal,
             "tags": tags, "source_kind": kind, "source_ref": ref,
@@ -147,8 +190,17 @@ def _fallback_generate(materials, scene_key, personalization):
 
 
 def analyze_materials(materials, scene_key, personalization=""):
-    image_paths = [m["url"] for m in materials if m["kind"] == "image" and m.get("url")]
+    image_paths = [m["url"] for m in materials if m["kind"] in ("image", "video") and m.get("url")]
+    # Transcribe audio so its content actually reaches the LLM text channel
+    audio_texts = []
+    for m in materials:
+        if m.get("kind") == "audio" and m.get("url"):
+            transcript = _transcribe_audio(m["url"])
+            if transcript:
+                audio_texts.append("[语音转写] " + transcript)
+            m["ref"] = transcript  # also surfaces in fallback cards if LLM is unavailable
     text_parts = [m["ref"] for m in materials if m["kind"] == "text" and m.get("ref")]
+    text_parts = audio_texts + text_parts
     text_content = "\n".join(text_parts)
     try:
         if _has_dashscope_key() and image_paths:

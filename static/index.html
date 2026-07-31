@@ -2,9 +2,17 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#B45309">
+  <meta name="apple-mobile-web-app-title" content="在场">
+  <link rel="apple-touch-icon" href="/static/assets/icon-192.png">
   <title>在场 — AI 记忆工坊</title>
   <link rel="stylesheet" href="/static/styles.css">
+  <link rel="manifest" href="/static/manifest.json">
+  <script type="importmap">
+  {"imports": {"three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"}}
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;900&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
 </head>
@@ -35,8 +43,9 @@
       <strong>用于"记住"的工具，恰恰在摧毁你的在场感。</strong>
     </p>
     <p class="hero-thesis">
-      在场接管"记"的负担，<br>
-      把你还给当下。
+      在场，意味着你可以放心地遗忘。<br>
+      AI 替你守住碎片，更守住碎片之间的联系。<br>
+      有价值的，不会真丢，只在等被重新发现。
     </p>
     <a href="#demo" class="hero-cta">开始体验 →</a>
   </div>
@@ -47,26 +56,26 @@
 <section class="thesis" id="thesis">
   <div class="container">
     <div class="section-label">核心主张</div>
-    <h2 class="section-title">人负责在场，AI 负责记住</h2>
+    <h2 class="section-title">在场，从敢于遗忘开始</h2>
 
     <div class="thesis-grid">
       <div class="thesis-card thesis-problem">
         <div class="thesis-icon">📉</div>
         <h3>问题</h3>
-        <p>人的工作记忆容量仅 <strong>4±1 个组块</strong>。逛完一座博物馆，认真看前 5 件展品，后面全部走马观花，走出馆门只模糊记得 1-2 件。</p>
-        <p class="thesis-quote">"拍了 = 记住了"是一个幻觉。<br>真相是：<strong>拍了 = 归档即遗忘</strong>。</p>
+        <p>真正摧毁在场的，不是遗忘，而是<strong>对遗忘的恐惧</strong>。你拍照、录像、狂记笔记，把全部注意力都交给了"别让它丢了"。</p>
+        <p class="thesis-quote">逛完一整天，认真在场的没几分钟。<br>真相是：<strong>越想记住，越没在场。</strong></p>
       </div>
       <div class="thesis-card thesis-solution">
-        <div class="thesis-icon">🔄</div>
+        <div class="thesis-icon">🛡</div>
         <h3>解法</h3>
-        <p>AI 接管素材的<strong>筛选、提炼、归档</strong>全流程。你只需要在场感受，结束后让 AI 帮你从一天的碎片中整理出"真正值得记住的东西"。</p>
-        <p class="thesis-quote">人提供方向（个性化输入），<br>AI 提供能力（筛选 + 提炼）。<br><strong>记忆卡片是人与 AI 共同完成的结果。</strong></p>
+        <p>在场替你兜底——不只筛出值得留存的<strong>碎片</strong>，更替你守住碎片之间那些<strong>尚未被看见的联系</strong>。</p>
+        <p class="thesis-quote">知道有价值的不会被真丢，<br>你才敢放下"别忘"的焦虑，<br><strong>把全部注意力交给眼前这一刻。</strong></p>
       </div>
       <div class="thesis-card thesis-recall">
-        <div class="thesis-icon">🧠</div>
-        <h3>不止于存</h3>
-        <p>光存不算"记住"。认知科学告诉我们：决定记忆留存的是<strong>提取</strong>，不是录入。</p>
-        <p>在场在需要时主动发起<strong>回忆挑战</strong>——按遗忘曲线（1天/3天/7天）测试你的提取能力，真正帮你记住。</p>
+        <div class="thesis-icon">🔗</div>
+        <h3>联结</h3>
+        <p>当你主动回来复盘，AI 把那些<strong>跨场景</strong>的潜在线索浮现给你——"你昨天看到的产学研协同，其实是上次那条产业化线索的延续"。</p>
+        <p class="thesis-quote">它从不主动打扰你。<br><strong>联结，只在被你需要时才出现。</strong></p>
       </div>
     </div>
   </div>
@@ -78,10 +87,21 @@
     <div class="section-label">交互体验</div>
     <h2 class="section-title">从碎片到记忆</h2>
 
+    <div class="demo-toolbar">
+      <span class="profile-label">当前档案</span>
+      <select class="profile-select" id="profileSelect"></select>
+        <button class="btn-primary profile-new" id="profileNewBtn">＋ 新建档案</button>
+      <button class="btn-primary install-btn" id="installBtn" style="display:none">⬇ 安装应用</button>
+      <span class="profile-note">每份档案独立保存卡片与账单；导出 JSON 可备份或在其他设备导入。</span>
+    </div>
+    <div class="offline-status" id="offlineStatus" style="display:none"></div>
+
     <div class="demo-tabs">
       <button class="tab active" data-tab="capture">采集提炼</button>
       <button class="tab" data-tab="library">记忆库</button>
       <button class="tab" data-tab="ledger">认知账单</button>
+      <button class="tab" data-tab="calendar">📅 时间线</button>
+      <button class="tab" data-tab="graph">🌐 记忆图谱</button>
       <button class="tab" data-tab="recall">回忆挑战 <span class="tab-badge" id="recallBadge"></span></button>
     </div>
 
@@ -89,6 +109,10 @@
     <div class="tab-panel active" id="panel-capture">
       <div class="capture-layout">
         <div class="capture-left">
+                    <div class="capture-quick-toggle" style="margin-bottom:16px;display:flex;gap:8px;align-items:center">
+            <span style="font-size:13px;font-weight:500;color:var(--ink-soft)">⚡ 快速模式</span>
+            <span class="recall-toggle" id="quickModeToggle"><span class="recall-switch"></span><span>一键记录（跳过筛选）</span></span>
+          </div>
           <div class="capture-step">
             <span class="step-num">1</span>
             <label>选择场景</label>
@@ -97,10 +121,19 @@
           <div class="capture-step">
             <span class="step-num">2</span>
             <label>上传素材（图片 / 录音 / 文字）</label>
-            <div class="upload-zone" id="uploadZone">
+                        <div class="capture-row">
+              <button type="button" class="capture-btn" id="capturePhotoBtn"><span class="capture-ico">📷</span>拍照</button>
+              <button type="button" class="capture-btn" id="captureVideoBtn"><span class="capture-ico">🎬</span>录像</button>
+              <button type="button" class="capture-btn" id="captureAudioBtn"><span class="capture-ico">🎙</span>录音</button>
+              <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none">
+              <input type="file" id="videoInput" accept="video/*" capture="environment" style="display:none">
+              <input type="file" id="audioFallbackInput" accept="audio/*" style="display:none">
+            </div>
+<div class="upload-zone" id="uploadZone">
               <div class="upload-prompt">
                 <span class="upload-icon">📎</span>
                 <span>点击或拖拽文件到此处</span>
+                <span class="capture-btn-hint">或在手机上用上方「拍照 / 录像 / 录音」直接采集</span>
                 <span class="upload-hint">支持 jpg / png / mp3 / wav / txt</span>
               </div>
               <input type="file" id="fileInput" multiple accept="image/*,audio/*,.txt">
@@ -130,6 +163,7 @@
         <div class="library-filters" id="libraryFilters"></div>
         <div class="library-count" id="libraryCount"></div>
       </div>
+      <div class="search-bar" id="searchBar"><div class="search-input-wrap"><span class="search-icon">🔍</span><input type="text" class="search-input" id="searchInput" placeholder="搜索记忆卡片标题、总结、标签..." autocomplete="off"><span class="search-clear" id="searchClear" style="display:none">✕</span></div><div class="search-results" id="searchResults" style="display:none"></div></div>
       <div class="card-grid" id="cardGrid"></div>
     </div>
 
@@ -140,11 +174,46 @@
       </div>
     </div>
 
+    <!-- TAB: Calendar -->
+    <div class="tab-panel" id="panel-calendar">
+      <div class="timeline-header" style="margin-bottom:20px">
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <button class="btn-primary" id="timelinePrev" style="flex:0;padding:8px 16px;width:auto;background:var(--bg-card);color:var(--ink);border:1px solid var(--line)">&larr; 上月</button>
+          <span id="timelineMonth" style="font-family:var(--serif);font-size:1.2rem;font-weight:600;min-width:120px;text-align:center"></span>
+          <button class="btn-primary" id="timelineNext" style="flex:0;padding:8px 16px;width:auto;background:var(--bg-card);color:var(--ink);border:1px solid var(--line)">下月 &rarr;</button>
+        </div>
+      </div>
+      <div class="timeline-grid" id="timelineGrid"></div>
+      <div class="timeline-cards" id="timelineCards" style="margin-top:24px">      <div class="ledger-actions" style="margin-top:32px;display:flex;gap:12px;flex-wrap:wrap">
+        <button class="btn-primary" id="exportBtn" style="flex:0;padding:10px 24px;width:auto">⬇ 导出全部卡片（JSON 备份）</button>
+        <button class="btn-primary" id="importBtn" style="flex:0;padding:10px 24px;width:auto;background:var(--teal);border-color:var(--teal)">⬆ 导入备份</button>
+        <input type="file" id="importFileInput" accept=".json" style="display:none">
+        <button class="btn-primary" id="manageTagsBtn" style="flex:0;padding:10px 24px;width:auto;background:var(--ink);border-color:var(--ink)">🏷 标签管理</button>
+      </div>
+    </div>
+    </div>
+
     <!-- TAB: Recall -->
     <div class="tab-panel" id="panel-recall">
       <div class="recall-container" id="recallContainer">
         <div class="recall-loading">加载中…</div>
       </div>
+    </div>
+
+    <!-- TAB: Graph -->
+    <div class="tab-panel" id="panel-graph">
+      <div class="graph-head">
+        <div>
+          <div class="section-label">记忆星图</div>
+          <div class="graph-hint">每个星团是一种场景，星点是卡片，光线是共享标签的联结。拖拽旋转、滚轮缩放、点击星点查看详情。</div>
+        </div>
+        <div class="graph-search-box">
+          <input class="graph-search-input" id="graphSearchInput" type="text" placeholder="搜索标题、标签、关键词…">
+          <button class="btn-primary graph-refresh" id="graphRefreshBtn">重新布局</button>
+        </div>
+      </div>
+      <div class="graph-wrap" id="graphWrap"><div class="graph-empty">生成图谱中…</div></div>
+      <div class="graph-legend" id="graphLegend"></div>
     </div>
   </div>
 </section>
@@ -161,6 +230,11 @@
     </div>
 
     <div class="about-block">
+      <h3>本地优先</h3>
+      <p>你的记忆永远在你手里。所有数据存储在本机的一个 SQLite 文件里，不上传云端、不依赖外部账户，可随时一键导出备份。在场能调用云端 AI 帮你筛与提炼，但<strong>它从不替你持有记忆</strong>——这是它和云端笔记应用最大的区别。</p>
+    </div>
+
+    <div class="about-block">
       <h3>GitHub</h3>
       <a href="https://github.com/sytweijin/practice-little-demo" target="_blank" class="github-link" id="githubLink">📦 github.com/sytweijin/practice-little-demo</a>
     </div>
@@ -172,6 +246,33 @@
   <p class="footer-sub">主题六：AI + 智能认知 — 用创意形式表达对人和 AI 关系的思考</p>
 </footer>
 
+<!-- ===== Audio Recorder Overlay ===== -->
+<div class="recorder-overlay" id="recorderOverlay">
+  <div class="recorder-box">
+    <div class="recorder-dot"></div>
+    <div class="recorder-info">
+      <div class="recorder-status">正在录音</div>
+      <div class="recorder-timer" id="recorderTimer">00:00</div>
+    </div>
+    <button type="button" class="recorder-stop" id="recorderStop">停止</button>
+  </div>
+</div>
+
+<!-- ===== Desktop Camera Overlay ===== -->
+<div class="modal-overlay" id="cameraOverlay">
+  <div class="camera-box">
+    <video id="cameraPreview" autoplay playsinline muted></video>
+    <div class="camera-controls">
+      <div class="camera-status-wrap">
+        <div class="recorder-status" id="cameraStatus">正在打开摄像头</div>
+        <div class="recorder-timer" id="cameraTimer">00:00</div>
+      </div>
+      <button type="button" class="camera-btn" id="cameraCaptureBtn">拍摄</button>
+      <button type="button" class="camera-cancel" id="cameraCancelBtn">取消</button>
+    </div>
+  </div>
+</div>
+
 <!-- ===== Card Modal ===== -->
 <div class="modal-overlay" id="cardModal">
   <div class="modal-content">
@@ -181,5 +282,6 @@
 </div>
 
 <script src="/static/app.js"></script>
+<script src="/static/app_plus.js"></script>
 </body>
 </html>
