@@ -40,47 +40,34 @@ def save_upload(filename, content_bytes):
 
 
 def _transcribe_audio(audio_url):
-    """Transcribe an uploaded audio file to text via DashScope Paraformer / OpenAI Whisper.
-    Returns "" when no key is configured or the call fails."""
+    """Transcribe audio via the OpenAI-compatible /audio/transcriptions endpoint.
+    Works with DashScope compatible mode (paraformer-v2) and real OpenAI (whisper-1).
+    Returns empty string when no key is configured or the call fails."""
     full = Path(__file__).parent / audio_url.lstrip("/")
     if not full.exists():
         return ""
+    api_key = os.getenv("DASHSCOPE_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return ""
+    if _has_dashscope_key():
+        base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        model = os.getenv("DASHSCOPE_ASR_MODEL", "paraformer-v2")
+    else:
+        base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        model = "whisper-1"
     try:
-        if _has_dashscope_key():
-            api_key = os.getenv("DASHSCOPE_API_KEY")
-            url = "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription"
-            # Paraformer file-based async transcription is complex; use the synchronous
-            # multimodal recognition endpoint which accepts base64 audio inline.
-            import base64 as _b64
-            b64 = _b64.b64encode(full.read_bytes()).decode()
-            suffix = full.suffix.lower().lstrip(".") or "wav"
-            mime = {"mp3": "audio/mpeg", "wav": "audio/wav", "m4a": "audio/mp4",
-                    "ogg": "audio/ogg", "aac": "audio/aac", "flac": "audio/flac"}.get(suffix, "audio/wav")
-            body = {
-                "model": "paraformer-v2",
-                "input": {"file": "data:" + mime + ";base64," + b64},
-                "parameters": {"result_format": "text"},
-            }
-            r = httpx.post(url, json=body, headers={"Authorization": "Bearer " + api_key}, timeout=120)
-            r.raise_for_status()
-            data = r.json()
-            out = data.get("output", {}).get("text") or data.get("text") or ""
-            return str(out).strip()
-        # OpenAI-compatible Whisper fallback
-        if _has_openai_key():
-            api_key = os.getenv("OPENAI_API_KEY")
-            base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-            with full.open("rb") as fh:
-                files = {"file": (full.name, fh, "application/octet-stream")}
-                r = httpx.post(base_url + "/audio/transcriptions", headers={"Authorization": "Bearer " + api_key},
-                               files=files, data={"model": "whisper-1"}, timeout=120)
-            r.raise_for_status()
-            return str(r.json().get("text", "")).strip()
+        with full.open("rb") as fh:
+            files = {"file": (full.name, fh, "application/octet-stream")}
+            r = httpx.post(
+                base_url + "/audio/transcriptions",
+                headers={"Authorization": "Bearer " + api_key},
+                files=files, data={"model": model}, timeout=120,
+            )
+        r.raise_for_status()
+        return str(r.json().get("text", "")).strip()
     except Exception as e:
         print("[ASR] transcription failed for " + audio_url + ": " + str(e))
     return ""
-
-
 def _build_prompt(scene_key, personalization):
     scenario = get_scenario(scene_key)
     parts = []
@@ -139,7 +126,7 @@ def _call_openai_vision(image_paths, text_content, scene_key, personalization):
     if text_content:
         content.append({"type": "text", "text": "Text notes:\n" + text_content})
     body = {
-        "model": "gpt-4o",
+        "model": os.getenv("OPENAI_VISION_MODEL", "gpt-4o"),
         "messages": [{"role": "user", "content": content}],
         "response_format": {"type": "json_object"},
     }
@@ -190,7 +177,9 @@ def _fallback_generate(materials, scene_key, personalization):
 
 
 def analyze_materials(materials, scene_key, personalization=""):
-    image_paths = [m["url"] for m in materials if m["kind"] in ("image", "video") and m.get("url")]
+    # Only images go to the vision API; videos are stored but not analyzed
+    # (sending a full video file as a fake base64 jpeg would fail on any model).
+    image_paths = [m["url"] for m in materials if m["kind"] == "image" and m.get("url")]
     # Transcribe audio so its content actually reaches the LLM text channel
     audio_texts = []
     for m in materials:
@@ -202,11 +191,14 @@ def analyze_materials(materials, scene_key, personalization=""):
     text_parts = [m["ref"] for m in materials if m["kind"] == "text" and m.get("ref")]
     text_parts = audio_texts + text_parts
     text_content = "\n".join(text_parts)
+    ai_used = False
     try:
         if _has_dashscope_key() and image_paths:
             cards = _call_dashscope_vision(image_paths, text_content, scene_key, personalization)
+            ai_used = True
         elif _has_openai_key() and image_paths:
             cards = _call_openai_vision(image_paths, text_content, scene_key, personalization)
+            ai_used = True
         else:
             cards = _fallback_generate(materials, scene_key, personalization)
     except Exception as e:
@@ -217,4 +209,127 @@ def analyze_materials(materials, scene_key, personalization=""):
             c["image_url"] = materials[i].get("url", "")
         if i < len(materials) and not c.get("source_kind"):
             c["source_kind"] = materials[i]["kind"]
-    return cards
+    return cards, ai_used
+
+
+def _call_text_llm(prompt):
+    """Call a text-only LLM (no vision needed).
+    Uses DashScope compatible mode or OpenAI, whichever key is configured.
+    Returns the raw text response, or None if no key / call fails."""
+    if _has_dashscope_key():
+        api_key = os.getenv("DASHSCOPE_API_KEY")
+        base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        model = os.getenv("DASHSCOPE_TEXT_MODEL", "qwen-plus")
+    elif _has_openai_key():
+        api_key = os.getenv("OPENAI_API_KEY")
+        base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        model = os.getenv("OPENAI_TEXT_MODEL", "gpt-4o-mini")
+    else:
+        return None
+    try:
+        body = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        r = httpx.post(
+            base_url + "/chat/completions", json=body,
+            headers={"Authorization": "Bearer " + api_key}, timeout=90,
+        )
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        print("[LLM-text] call failed: " + str(e))
+        return None
+
+
+def _parse_json_key(text, key):
+    """Parse JSON from LLM output, return the value of a given top-level key."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        text = text[start:end + 1]
+    data = json.loads(text)
+    return data.get(key, [])
+
+
+def discover_connections(cards):
+    """Ask the LLM to find non-obvious conceptual links between cards.
+    Returns (pairs, ai_used) where pairs is a list of {a, b, reason}."""
+    if not _has_dashscope_key() and not _has_openai_key():
+        return [], False
+    compact = []
+    for c in cards[:60]:
+        compact.append({
+            "id": c["id"],
+            "title": c["title"],
+            "summary": (c.get("summary") or "")[:150],
+            "tags": c.get("tags") or [],
+            "scene": c.get("scene_type") or "custom",
+        })
+    prompt = (
+        "You are a cognitive assistant. The user collected memory cards across different scenes.\n"
+        "Below are their cards:\n" + json.dumps(compact, ensure_ascii=False) + "\n\n"
+        "Find 3-8 non-obvious conceptual connections between cards from DIFFERENT scenes.\n"
+        "A good connection reveals a hidden pattern, shared theme, or cross-scene insight "
+        "that the user might not have noticed.\n"
+        "Write the reason in Chinese, one sentence each.\n"
+        'Return strictly as JSON: {"connections": [{"a": <int card_id>, "b": <int card_id>, "reason": "..."}]}'
+    )
+    text = _call_text_llm(prompt)
+    if not text:
+        return [], False
+    try:
+        pairs = _parse_json_key(text, "connections")
+    except Exception:
+        pairs = []
+    valid = []
+    ids = {c["id"] for c in cards}
+    for p in pairs:
+        a, b = p.get("a"), p.get("b")
+        if a in ids and b in ids and a != b and p.get("reason"):
+            valid.append({"a": int(a), "b": int(b), "reason": str(p["reason"])})
+    return valid, True
+
+
+def generate_narrative(cards, date_label):
+    """Ask the LLM to weave cards into a themed retrospective narrative.
+    Returns (narrative_dict, ai_used)."""
+    if not _has_dashscope_key() and not _has_openai_key():
+        return None, False
+    compact = []
+    for c in cards:
+        compact.append({
+            "title": c["title"],
+            "summary": (c.get("summary") or "")[:200],
+            "personal": (c.get("personal") or "")[:150],
+            "scene": c.get("scene_type") or "custom",
+            "date": c.get("source_date") or "",
+            "tags": c.get("tags") or [],
+        })
+    prompt = (
+        "You are a reflective writing assistant. The user collected memory cards during: " + date_label + "\n"
+        "Below are their cards:\n" + json.dumps(compact, ensure_ascii=False) + "\n\n"
+        "Write a warm, reflective narrative in Chinese (400-600 chars) that weaves these "
+        "memories into a coherent story, organized by theme rather than chronology.\n"
+        "Use second person. Highlight the personal growth and cross-scene insights.\n"
+        "Return strictly as JSON: {\"title\": \"...\", \"body\": \"...\"}"
+    )
+    text = _call_text_llm(prompt)
+    if not text:
+        return None, False
+    try:
+        result = _parse_json_key(text, "title")  # just to parse JSON
+        raw = text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        s, e = raw.find("{"), raw.rfind("}")
+        data = json.loads(raw[s:e+1]) if s >= 0 else {}
+        title = data.get("title", date_label + " 回顾")
+        body = data.get("body", "")
+        return {"title": str(title), "body": str(body)}, True
+    except Exception as ex:
+        print("[Narrative] parse failed: " + str(ex))
+        return None, False

@@ -169,6 +169,7 @@ async def api_analyze(
     scene_type: str = Form("custom"),
     personalization: str = Form(""),
     notes: str = Form(""),
+    quick_mode: bool = Form(False),
     files: list[UploadFile] = File(default=[]),
 ):
     materials = []
@@ -197,7 +198,7 @@ async def api_analyze(
         raise HTTPException(400, "No materials provided")
 
     t0 = time.monotonic()
-    cards_data = llm.analyze_materials(materials, scene_type, personalization)
+    cards_data, ai_used = llm.analyze_materials(materials, scene_type, personalization)
     ai_seconds = max(0.0, time.monotonic() - t0)
     scenario = get_scenario(scene_type)
 
@@ -214,9 +215,9 @@ async def api_analyze(
 
     # Record ledger
     minutes = len(materials) * scenario["minutes_per_material"]
-    memory.record_ledger(scene_type, len(materials), minutes, len(saved), ai_seconds=ai_seconds)
+    memory.record_ledger(scene_type, len(materials), minutes, len(saved), ai_seconds=ai_seconds, quick_mode=quick_mode)
 
-    return {"cards": saved, "materials_count": len(materials), "minutes_saved": minutes, "ai_seconds": round(ai_seconds, 1)}
+    return {"cards": saved, "materials_count": len(materials), "minutes_saved": minutes, "ai_seconds": round(ai_seconds, 1), "ai_used": ai_used, "quick_mode": quick_mode}
 
 
 class ConfirmInput(BaseModel):
@@ -332,7 +333,11 @@ def api_card_connections(card_id: int):
 # ---- 全文搜索 ----
 
 @app.get("/api/export")
-def api_export(format: str = "json"):
+def api_export(format: str = "json", full: bool = False):
+    if full:
+        snapshot = memory.export_full_snapshot()
+        return JSONResponse(content=snapshot,
+                           headers={"Content-Disposition": "attachment; filename=presence_snapshot.json"})
     cards = memory.export_cards_data()
     if format == "json":
         return JSONResponse(content={"cards": cards, "exported_at": datetime.now().isoformat()},
@@ -348,6 +353,14 @@ class ImportInput(BaseModel):
 def api_import(data: ImportInput):
     imported, skipped = memory.import_cards(data.cards, merge=data.merge)
     return {"imported": imported, "skipped": skipped}
+
+
+@app.post("/api/sync/import")
+def api_smart_import(data: dict):
+    if not isinstance(data, dict):
+        raise HTTPException(400, "Invalid snapshot format")
+    imported, updated, skipped = memory.smart_import(data)
+    return {"imported": imported, "updated": updated, "skipped": skipped}
 
 
 # ---- 标签管理 ----
@@ -368,6 +381,97 @@ def api_rename_tag(data: TagRenameInput):
         raise HTTPException(400, "old tag name is required")
     updated = memory.rename_tag(data.old.strip(), data.new.strip())
     return {"updated": updated}
+
+
+# ---- Semantic Connections ----
+
+@app.post("/api/connections/discover")
+def api_discover_connections():
+    cards = memory.list_cards()
+    if len(cards) < 2:
+        raise HTTPException(400, "Need at least 2 cards to discover connections")
+    pairs, ai_used = llm.discover_connections(cards)
+    added = memory.save_ai_connections(pairs)
+    return {"discovered": added, "total": len(pairs), "ai_used": ai_used}
+
+
+@app.get("/api/connections")
+def api_connections():
+    return {"connections": memory.all_ai_connections(), "exists": memory.has_ai_connections()}
+
+
+@app.delete("/api/connections")
+def api_clear_connections():
+    memory.clear_ai_connections()
+    return {"cleared": True}
+
+
+@app.put("/api/connections/lock")
+def api_toggle_lock(data: dict):
+    card_a = int((data or {}).get("card_a", 0))
+    card_b = int((data or {}).get("card_b", 0))
+    if not card_a or not card_b:
+        raise HTTPException(400, "card_a and card_b required")
+    locked = memory.toggle_connection_lock(card_a, card_b)
+    return {"locked": locked}
+
+
+# ---- Narratives ----
+
+@app.get("/api/narratives")
+def api_narratives():
+    return {"narratives": memory.list_narratives()}
+
+
+@app.post("/api/narrative/generate")
+def api_generate_narrative(data: dict):
+    date_start = (data or {}).get("date_start", "")
+    date_end = (data or {}).get("date_end", "")
+    all_cards = memory.list_cards()
+    if date_start:
+        all_cards = [c for c in all_cards if c.get("source_date") and c["source_date"] >= date_start]
+    if date_end:
+        all_cards = [c for c in all_cards if c.get("source_date") and c["source_date"] <= date_end]
+    if not all_cards:
+        # Auto-fallback: find the most recent month that actually has cards
+        recent = memory.list_cards()
+        if recent:
+            best_month = max(
+                (c.get("source_date") or "")[:7] for c in recent if c.get("source_date")
+            )
+            if best_month:
+                all_cards = [c for c in recent if (c.get("source_date") or "")[:7] == best_month]
+                date_start = best_month + "-01"
+                import calendar as _cal
+                _y, _m = int(best_month[:4]), int(best_month[5:7])
+                date_end = best_month + "-" + str(_cal.monthrange(_y, _m)[1])
+                date_label = best_month
+        if not all_cards:
+            raise HTTPException(400, "No cards found in the selected range")
+    date_label = date_start or "all"
+    if date_start and date_end and date_start != date_end:
+        date_label = date_start + " ~ " + date_end
+    t0 = time.monotonic()
+    result, ai_used = llm.generate_narrative(all_cards, date_label)
+    ai_seconds = max(0.0, time.monotonic() - t0)
+    if not result:
+        # Fallback: a simple themed summary even without AI
+        titles = [c["title"] for c in all_cards[:5]]
+        result = {
+            "title": date_label + " \u8bb0\u5fc6\u56de\u987e",
+            "body": "\u8fd9\u6bb5\u65f6\u95f4\u4f60\u6536\u96c6\u4e86 " + str(len(all_cards)) + " \u5f20\u8bb0\u5fc6\u5361\u7247\u3002"
+            + "\u672a\u63a5\u5165 AI\uff0c\u4ee5\u4e0b\u4e3a\u5360\u4f4d\u608d\u8ff0\uff1a\n\n"
+            + "\n".join("- " + t for t in titles),
+        }
+    nid = memory.save_narrative(result["title"], result["body"], date_start, date_end, ai_used=ai_used)
+    return {"id": nid, "title": result["title"], "body": result["body"], "ai_used": ai_used, "ai_seconds": round(ai_seconds, 1)}
+
+
+@app.delete("/api/narratives/{nid}")
+def api_delete_narrative(nid: int):
+    memory.delete_narrative(nid)
+    return {"ok": True}
+
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -456,12 +560,14 @@ if __name__ == "__main__":
     print("========================================\n")
     if cert:
         uvicorn.run(
-            app,
+            "main:app",
             host="0.0.0.0",
             port=8001,
             ssl_certfile=cert[0],
             ssl_keyfile=cert[1],
+            reload=True,
+            reload_dirs=["."],
         )
     else:
         print("[提示] 未检测到 cryptography，手机端暂时只能上传录音文件；安装后重启即可浏览器内录音。")
-        uvicorn.run(app, host="0.0.0.0", port=8001)
+        uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True, reload_dirs=["."])

@@ -24,6 +24,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupGraph();
   setupNotifications();
   initOfflineQueue();
+  handleSharedContent();
   // data loads are independent; one failure must not break the others
   loadScenarios().catch(e => console.warn("scenarios", e));
   loadCards().catch(e => console.warn("cards", e));
@@ -33,12 +34,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // ---- API helpers ----
 const profileName = () => localStorage.getItem("presenceProfile") || "default";
-async function api(path, opts = {}) {
+async function api(path, opts = {}, skipJson) {
   opts = opts || {};
   opts.headers = Object.assign({}, opts.headers || {});
   opts.headers["X-Presence-Profile"] = profileName();
   const r = await fetch(API + path, opts);
   if (!r.ok) throw new Error(path + " " + r.status);
+  if (skipJson) return r;
   return r.json();
 }
 
@@ -228,7 +230,15 @@ function toggleDesktopVideo() {
   if (camRec && camRec.state !== "inactive") { closeDesktopCamera(); return; }
   if (!camStream) { alert("摄像头还没准备好，请稍后再试。"); return; }
   var mime = _pickVideoMime();
-  var rec = mime ? new MediaRecorder(camStream, { mimeType: mime }) : new MediaRecorder(camStream);
+  var rec;
+  try {
+    rec = mime ? new MediaRecorder(camStream, { mimeType: mime }) : new MediaRecorder(camStream);
+  } catch (err) {
+    alert("当前浏览器不支持录像，将改为选择文件。");
+    var fi = document.getElementById("videoInput");
+    if (fi) fi.click();
+    return;
+  }
   camRec = rec;
   camChunks = [];
   rec.ondataavailable = function(e) { if (e.data.size > 0) camChunks.push(e.data); };
@@ -335,10 +345,11 @@ async function doAnalyze() {
   fd.append("scene_type", selectedScenario);
   fd.append("personalization", personalization);
   fd.append("notes", notes);
+  fd.append("quick_mode", "false");
   for (const f of selectedFiles) fd.append("files", f);
   try {
     const data = await api("/api/analyze", { method: "POST", body: fd });
-    renderDraftCards(data.cards, data.minutes_saved, data.ai_seconds);
+    renderDraftCards(data.cards, data.minutes_saved, data.ai_seconds, data.ai_used);
     selectedFiles = []; renderFileList();
     document.getElementById("notesInput").value = "";
     document.getElementById("personalizationInput").value = "";
@@ -356,10 +367,11 @@ async function doAnalyze() {
     btn.disabled = false; btn.textContent = "生成记忆卡片 →";
   }
 }
-function renderDraftCards(drafts, minutes, aiSeconds) {
+function renderDraftCards(drafts, minutes, aiSeconds, aiUsed) {
   const container = document.getElementById("draftCards");
   if (!drafts.length) { container.innerHTML = '<div class="draft-empty">AI 认为本次素材中没有值得长期保存的内容</div>'; return; }
-  let html = '<div style="font-size:13px;color:var(--ink-faint);margin-bottom:6px">AI 筛选出 ' + drafts.length + " 条值得留存的内容 · 预估节省 " + minutes + " 分钟整理时间" + (aiSeconds ? " · AI 实际处理 " + Math.max(1, Math.round(aiSeconds)) + " 秒" : "") + "</div>";
+  let aiLabel = (aiUsed === false) ? "⚠️ 未接入 AI，以下为原始素材占位卡片（配置 API Key 后可启用真实筛选）" : ("✨ AI 筛选出 " + drafts.length + " 条值得留存的内容 · 预估节省 " + minutes + " 分钟整理时间" + (aiSeconds ? " · AI 实际处理 " + Math.max(1, Math.round(aiSeconds)) + " 秒" : ""));
+  let html = '<div style="font-size:13px;color:var(--ink-faint);margin-bottom:6px">' + aiLabel + "</div>";
   html += '<div style="font-size:12px;color:var(--ink-faint);margin-bottom:12px;border-left:2px solid var(--line);padding-left:10px"><strong style="color:var(--ink-soft)">AI 的筛选依据：</strong>信息密度 · 独特性 · 长期价值。<span style="color:var(--ink-faint)">个人归因（为什么对你重要）由你补充——AI 不替你判断。</span></div>';
   html += drafts.map(c =>
     '<div class="draft-card" data-id="' + c.id + '">' +
@@ -444,7 +456,7 @@ function renderFolderView() {
     // in batch mode, track all card ids
     if (batchMode) fc.forEach(function(c){ if(allIds.indexOf(String(c.id))<0) allIds.push(String(c.id)); });
     var folderAllSelected = batchMode && fc.length && fc.every(function(c){ return selectedIds[c.id]; });
-    if (b.is_unfiled) folderIcon = "📦"; var folderIcon = batchMode ? '<span class="folder-check' + (folderAllSelected ? " on" : "") + '" data-folder="' + esc(b.batch_id) + '">✓</span>' : '<span class="batch-icon">📁</span>';
+    var folderIcon = b.is_unfiled ? '<span class="batch-icon">📦</span>' : (batchMode ? '<span class="folder-check' + (folderAllSelected ? " on" : "") + '" data-folder="' + esc(b.batch_id) + '">✓</span>' : '<span class="batch-icon">📁</span>');
     return '<div class="batch-folder' + (batchMode ? " batch-on" : "") + '" data-batch="' + esc(b.batch_id) + '">' +
       '<div class="batch-header">' +
         folderIcon +
@@ -532,7 +544,7 @@ function cardHtml(c) {
     '<span class="mem-card-scene scene-' + c.scene_type + '">' + esc(sName) + "</span>" +
     '<div class="mem-card-title">' + esc(c.title) + "</div>" +
     '<div class="mem-card-summary">' + esc(c.summary) + "</div>" +
-    (c.personal ? '<div class="mem-card-personal">' + esc(c.personal) + "</div>" : "") +
+    (c.personal ? '<div class="mem-card-personal">' + esc(c.personal) + "</div>" : '<div class="mem-card-personal-empty">✎ 补充个人归因</div>') +
     '<div class="mem-card-tags">' + (c.tags || []).map(function(t) { return '<span class="mem-card-tag">' + esc(t) + "</span>"; }).join("") + "</div>" +
     "</div>" +
     '<div class="mem-card-footer"><span>' + (c.source_date || "") + "</span>" + recall + "</div>" +
@@ -713,6 +725,10 @@ async function loadLedger() {
   html += '<div class="ledger-stat"><div class="ledger-num">' + stats.recall_done + "/" + stats.recall_total + '</div><div class="ledger-label">回忆完成率<span class="ledger-sub">' + (stats.recall_sessions || 0) + " 次复习 · 平均难度 " + (stats.avg_difficulty || 0) + "</span></div></div>";
   html += '<div class="ledger-stat"><div class="ledger-num">' + aiTxt + '</div><div class="ledger-label">AI 实际处理时长<span class="ledger-sub">按本次会话真实计时</span></div></div>';
   html += '<div class="ledger-stat"><div class="ledger-num">' + recallTxt + '</div><div class="ledger-label">复习投入时长<span class="ledger-sub">基于回忆挑战计时</span></div></div>';
+  var quick = stats.quick_mode_count || 0, deep = stats.deep_mode_count || 0;
+  if (quick + deep > 0) {
+    html += '<div class="ledger-stat"><div class="ledger-num">' + quick + '<span style="font-size:0.6em;color:var(--ink-faint)">/' + deep + '</span></div><div class="ledger-label">快速 / 深度<span class="ledger-sub">快速记录跳过筛选，深度筛选留存</span></div></div>';
+  }
   html += '<div class="ledger-stat"><div class="ledger-num">' + stats.total_minutes_saved + '<span class="unit"> min</span></div><div class="ledger-label">估算节省<span class="ledger-sub">按场景系数，仅供对照</span></div></div>';
   const maxScene = Math.max(...Object.values(stats.by_scene), 1);
   html += '<div class="ledger-bar-section"><div class="ledger-bar-title">按场景分布</div>';
@@ -741,6 +757,7 @@ function renderRecall() {
   container.innerHTML =
     '<div class="recall-intro">第 ' + progress + " / " + recallQueue.length + ' 张 · 基于间隔重复算法，在遗忘临界点主动发起回忆</div>' +
     '<div class="recall-card">' +
+    (card.image_url ? mediaTag(card.image_url, 'recall-clue-media', 'style="width:100%;max-height:200px;object-fit:cover;border-radius:8px;margin-bottom:12px"') : '') +
     '<div class="recall-prompt-label">回忆提示</div>' +
     '<div class="recall-hint">' + getRecallHint(card) + "</div>" +
     '<div class="recall-prompt-label">先默写你记得的内容</div>' +
@@ -757,9 +774,10 @@ function renderRecall() {
     '<button class="recall-diff-btn hard" data-d="2">困难 → 缩短间隔</button>' +
     "</div></div></div>";
   document.getElementById("revealBtn").onclick = () => { var tryText = (document.getElementById("recallTry").value || "").trim(); var reveal = document.getElementById("recallReveal"); if (tryText) { var cmp = document.createElement("div"); cmp.className = "recall-mine"; cmp.innerHTML = '<div class="recall-prompt-label">你刚才写的</div><div class="recall-reveal-body recall-reveal-mine">' + esc(tryText) + '</div>'; reveal.insertBefore(cmp, reveal.firstChild); } reveal.classList.add("show"); document.getElementById("revealBtn").style.display = "none"; };
+  var _startTs = recallStartTs;
   container.querySelectorAll(".recall-diff-btn").forEach(b => {
     b.onclick = async () => {
-      const secs = Math.max(1, Math.round((Date.now() - recallStartTs) / 1000));
+      const secs = Math.max(1, Math.round((Date.now() - _startTs) / 1000));
       await api("/api/recall/" + card.id + "/attempt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ difficulty: parseInt(b.dataset.d), seconds: secs }) });
       recallIndex++; renderRecall(); await loadCards(); await loadLedger();
     };
@@ -782,7 +800,7 @@ function openCardModal(card) {
   html += '<div class="modal-section"><div class="modal-section-label">日期</div><div class="modal-section-text">' + (card.source_date || "") + "</div></div>";
   html += '<div class="modal-section conn-section" id="connSection"><div class="modal-section-label">相关记忆</div><div class="conn-loading">寻找碎片之间的联系…</div></div>';
   if (card.recall_enabled) { html += '<div class="modal-section"><div class="modal-section-label">复习状态</div><div class="modal-section-text">已复习 ' + (card.recall_count || 0) + " 次 · 下次复习：" + (card.next_recall || "待定") + "</div></div>"; }
-  html += '<div style="display:flex;gap:8px;margin-top:16px"><button class="btn-primary" style="flex:1" onclick="closeModal();setTimeout(function(){var c=cards.find(function(x){return x.id==' + card.id + '});if(c)openEditModal(c);},200)">编辑</button><button class="btn-primary" style="flex:0;background:var(--rose);border:none;padding:12px 20px" onclick="deleteCard(' + card.id + ')">删除</button></div></div>';
+  html += '<div class="modal-actions"><button class="modal-btn" onclick="closeModal();setTimeout(function(){var c=cards.find(function(x){return x.id==' + card.id + '});if(c)openEditModal(c);},200)">✎ 编辑</button><button class="modal-btn modal-btn-danger" onclick="deleteCard(' + card.id + ')">删除</button></div></div>';
   body.innerHTML = html;
   document.getElementById("cardModal").classList.add("show");
   loadConnections(card.id);
@@ -814,9 +832,12 @@ async function loadConnections(cardId) {
     if (!conns.length) { sec.innerHTML = '<div class="modal-section-label">相关记忆</div><div class="conn-empty">暂未发现与其他记忆的联系——试试为卡片补充标签</div>'; return; }
     var sceneName = {}; scenarios.forEach(function(s){ sceneName[s.key]=s.name; });
     var html = '<div class="modal-section-label">相关记忆</div>' + conns.map(function(c){
-      return '<div class="conn-item" data-id="' + c.id + '"><span class="conn-scene scene-' + c.scene_type + '">' + esc(sceneName[c.scene_type]||c.scene_type) + '</span>'
+      var tagPart = (c.shared_tags||[]).length ? '<span class="conn-via">' + (c.shared_tags||[]).map(function(t){return '#'+esc(t);}).join(' ') + '</span>' : '';
+      var aiPart = c.ai_reason ? '<span class="conn-ai-reason">🧠 ' + esc(c.ai_reason) + '</span>' : '';
+      var itemCls = c.ai_reason ? 'conn-item conn-ai' : 'conn-item';
+      return '<div class="' + itemCls + '" data-id="' + c.id + '"><span class="conn-scene scene-' + c.scene_type + '">' + esc(sceneName[c.scene_type]||c.scene_type) + '</span>'
         + '<span class="conn-title">' + esc(c.title) + '</span>'
-        + '<span class="conn-via">' + (c.shared_tags||[]).map(function(t){return '#'+esc(t);}).join(' ') + '</span></div>';
+        + tagPart + aiPart + '</div>';
     }).join('');
     sec.innerHTML = html;
     sec.querySelectorAll('.conn-item').forEach(function(el){ el.onclick=function(){ var id=el.dataset.id; var c=conns.find(function(x){return String(x.id)===id;}); if(c){ openCardModal(c); } }; });
@@ -876,6 +897,53 @@ function setupProfile() {
   loadProfiles().catch(() => {});
 }
 
+// ---- PWA Share Target Receiver ----
+async function handleSharedContent() {
+  var params = new URLSearchParams(location.search);
+  if (!params.get("shared")) return;
+  // Clean the URL so it does not re-trigger on refresh
+  history.replaceState(null, "", location.pathname);
+  if (!("caches" in window)) return;
+  try {
+    var cache = await caches.open("presence-shared");
+    var resp = await cache.match("/__shared_manifest");
+    if (!resp) return;
+    var manifest = await resp.json();
+    // Restore shared files from cache as File objects
+    var restoredFiles = [];
+    for (var fi of (manifest.files || [])) {
+      var fileResp = await cache.match(fi.cacheKey);
+      if (!fileResp) continue;
+      var blob = await fileResp.blob();
+      restoredFiles.push(new File([blob], fi.name || "shared_file", { type: fi.type }));
+    }
+    // Clean up the shared cache
+    await cache.delete("/__shared_manifest");
+    for (var fi2 of (manifest.files || [])) {
+      await cache.delete(fi2.cacheKey);
+    }
+    // Populate the capture UI
+    if (restoredFiles.length) {
+      selectedFiles = restoredFiles;
+      renderFileList();
+    }
+    if (manifest.text) {
+      var notesEl = document.getElementById("notesInput");
+      if (notesEl) notesEl.value = manifest.text;
+    }
+    // Switch to capture tab and notify
+    var captureTab = document.querySelector(".tab[data-tab=capture]");
+    if (captureTab) captureTab.click();
+    var statusMsg = restoredFiles.length + " \u4e2a\u6587\u4ef6\u5df2\u5bfc\u5165\u91c7\u96c6\u533a\uff0c\u9009\u62e9\u573a\u666f\u540e\u70b9\u51fb\u751f\u6210\u5361\u7247";
+    var draftEl = document.getElementById("draftCards");
+    if (draftEl) {
+      draftEl.innerHTML = '<div class="draft-card" style="border-color:var(--amber)"><div class="dc-title">\u2728 \u521a\u4ece\u7cfb\u7edf\u5206\u4eab\u63a5\u6536</div><div class="dc-summary">' + statusMsg + '</div></div>';
+    }
+  } catch (e) {
+    console.warn("[share] restore failed:", e);
+  }
+}
+
 // ---- PWA ----
 let deferredInstallPrompt = null;
 function setupPWA() {
@@ -915,10 +983,56 @@ function maybeNotifyRecall() {
   } catch (e) {}
 }
 
+// ---- Semantic Connections ----
+async function discoverConnections(btn) {
+  if (!confirm("让 AI 扫描全库，发现跨场景的深层联结？\n这会发送卡片摘要给 AI 处理。")) return;
+  var orig = btn.textContent;
+  btn.disabled = true; btn.textContent = "🧠 AI 正在发现联结…";
+  try {
+    var d = await api("/api/connections/discover", { method: "POST" });
+    if (d.ai_used) {
+      var msg = "✨ 新增 " + d.discovered + " 条联结";
+      if (d.total > d.discovered) msg += "（本次共发现 " + d.total + " 条，其中 " + (d.total - d.discovered) + " 条已存在）";
+      msg += "。\n点击联结线可锁定/解锁，锁定的不会被清除。";
+      alert(msg);
+      if (typeof loadGraph === "function") loadGraph();
+    } else {
+      alert("⚠️ 未接入 AI，无法发现联结。\n请配置 API Key 后再试。");
+    }
+  } catch (e) {
+    alert("发现联结失败：" + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
+  }
+}
+
 // ---- Graph ----
+function toggleConnectionLock(cardA, cardB) {
+  return api("/api/connections/lock", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ card_a: cardA, card_b: cardB })
+  }).then(function(res) { return res.locked; });
+}
 function setupGraph() {
   const btn = document.getElementById("graphRefreshBtn");
   if (btn) btn.onclick = () => loadGraph();
+  const dBtn = document.getElementById("discoverConnBtn");
+  if (dBtn) dBtn.onclick = () => discoverConnections(dBtn);
+
+  const clearBtn = document.getElementById("clearConnBtn");
+  if (clearBtn) clearBtn.onclick = () => {
+    if (!confirm("清除未锁定的 AI 联结？\n已锁定的联结会保留。\n这不会影响你的卡片。")) return;
+    clearBtn.disabled = true; clearBtn.textContent = "清除中…";
+    api("/api/connections", { method: "DELETE" }).then(function() {
+      clearBtn.style.display = "none";
+      if (typeof loadGraph === "function") loadGraph();
+    }).catch(function(e) {
+      alert("清除失败：" + e.message);
+    }).finally(function() {
+      clearBtn.disabled = false; clearBtn.textContent = "清除联结";
+    });
+  };
   const search = document.getElementById("graphSearchInput");
   if (search) {
     var timer = null;
@@ -952,8 +1066,10 @@ async function loadGraph() {
   try {
     const data = await api("/api/graph?limit=200");
     var has3d = await ensureGraph3D();
+    var clearBtn = document.getElementById("clearConnBtn");
+    if (clearBtn) clearBtn.style.display = (data.ai_links && data.ai_links.length) ? "" : "none";
     if (has3d && window.Graph3D.isReady) {
-      window.Graph3D.render(wrap, data, onGraphCardClick);
+      window.Graph3D.render(wrap, data, onGraphCardClick, toggleConnectionLock);
     } else {
       renderGraph(wrap, data);
     }
@@ -1017,6 +1133,12 @@ function renderGraph(wrap, data) {
     const a = nodeMap[l.source], b = nodeMap[l.target];
     if (!a || !b) continue;
     svg += '<line x1="' + a.x.toFixed(1) + '" y1="' + a.y.toFixed(1) + '" x2="' + b.x.toFixed(1) + '" y2="' + b.y.toFixed(1) + '" stroke="rgba(28,25,23,0.14)" stroke-width="1"/>';
+  }
+  var aiLinks = (data.ai_links || []);
+  for (const al of aiLinks) {
+    const a = nodeMap[al.source], b = nodeMap[al.target];
+    if (!a || !b) continue;
+    svg += '<line x1="' + a.x.toFixed(1) + '" y1="' + a.y.toFixed(1) + '" x2="' + b.x.toFixed(1) + '" y2="' + b.y.toFixed(1) + '" stroke="' + (al.locked ? '#ffffff' : (al.reason ? '#22d3ee' : 'rgba(34,211,238,0.5)')) + '" stroke-width="1.8" stroke-dasharray="4 3" opacity="0.7"><title>' + esc(al.reason || 'AI connection') + (al.locked ? ' [\u5df2\u9501\u5b9a]' : '') + '</title></line>';
   }
   for (const n of nodes) {
     if (n.kind === "tag") {

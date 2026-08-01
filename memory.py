@@ -45,6 +45,9 @@ def init_db():
         "ALTER TABLE cards ADD COLUMN batch_id TEXT DEFAULT ''",
         "ALTER TABLE cards ADD COLUMN recall_seconds INTEGER DEFAULT 0",
         "ALTER TABLE ledger ADD COLUMN ai_seconds REAL DEFAULT 0",
+        "ALTER TABLE ledger ADD COLUMN quick_mode INTEGER DEFAULT 0",
+        "ALTER TABLE ledger ADD COLUMN quick_mode INTEGER DEFAULT 0",  # idempotent guard
+        "ALTER TABLE ai_connections ADD COLUMN locked INTEGER DEFAULT 0",
     ):
         try:
             conn.execute(migration)
@@ -80,8 +83,25 @@ def init_db():
         materials_count INTEGER DEFAULT 0,
         minutes_saved INTEGER DEFAULT 0,
         cards_generated INTEGER DEFAULT 0,
-        focus_pct INTEGER DEFAULT 94,
-        ai_seconds REAL DEFAULT 0
+        focus_pct INTEGER DEFAULT 0,
+        ai_seconds REAL DEFAULT 0,
+        quick_mode INTEGER DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS ai_connections (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        card_a INTEGER NOT NULL,
+        card_b INTEGER NOT NULL,
+        reason TEXT DEFAULT "",
+        created_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE TABLE IF NOT EXISTS narratives (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        body TEXT DEFAULT "",
+        date_start TEXT,
+        date_end TEXT,
+        ai_used INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now','localtime'))
     );
     CREATE TABLE IF NOT EXISTS folders (
         folder_id TEXT PRIMARY KEY,
@@ -143,6 +163,7 @@ def _row_to_card(row):
         "next_recall": row["next_recall"],
         "recall_interval": row["recall_interval"],
         "difficulty": row["difficulty"],
+        "recall_seconds": row["recall_seconds"] if "recall_seconds" in row.keys() else 0,
         "batch_id": row["batch_id"] if "batch_id" in row.keys() else "",
         "created_at": row["created_at"],
     }
@@ -474,6 +495,8 @@ def ledger_stats():
         (today,),
     ).fetchone()[0]
     total_analysis_seconds = conn.execute("SELECT COALESCE(SUM(ai_seconds),0) FROM ledger").fetchone()[0]
+    quick_mode_count = conn.execute("SELECT COUNT(*) FROM ledger WHERE quick_mode = 1").fetchone()[0]
+    deep_mode_count = conn.execute("SELECT COUNT(*) FROM ledger WHERE quick_mode = 0").fetchone()[0]
     total_recall_seconds = conn.execute("SELECT COALESCE(SUM(recall_seconds),0) FROM cards").fetchone()[0]
     recall_sessions = conn.execute("SELECT COUNT(*) FROM cards WHERE recall_count > 0").fetchone()[0]
     avg_difficulty = conn.execute("SELECT COALESCE(AVG(difficulty),0) FROM cards WHERE difficulty > 0").fetchone()[0]
@@ -490,16 +513,18 @@ def ledger_stats():
         "recall_sessions": recall_sessions,
         "avg_difficulty": round(avg_difficulty, 2),
         "recall_due": due,
+        "quick_mode_count": quick_mode_count,
+        "deep_mode_count": deep_mode_count,
     }
 
 
-def record_ledger(scene_type, materials_count, minutes_saved, cards_generated, ai_seconds=0):
+def record_ledger(scene_type, materials_count, minutes_saved, cards_generated, ai_seconds=0, quick_mode=False):
     conn = get_db()
     conn.execute(
-        """INSERT INTO ledger (date, scene_type, materials_count, minutes_saved, cards_generated, ai_seconds)
-           VALUES (?,?,?,?,?,?)""",
+        """INSERT INTO ledger (date, scene_type, materials_count, minutes_saved, cards_generated, ai_seconds, quick_mode)
+           VALUES (?,?,?,?,?,?,?)""",
         (datetime.now().strftime("%Y-%m-%d"), scene_type, materials_count, minutes_saved, cards_generated,
-         max(0.0, float(ai_seconds or 0))),
+         max(0.0, float(ai_seconds or 0)), int(bool(quick_mode))),
     )
     conn.commit()
     conn.close()
@@ -533,6 +558,13 @@ def card_connections(card_id, limit=6):
     conn.close()
     # rank by number of shared tags, then recency
     result.sort(key=lambda c: (-len(c["shared_tags"]), c["created_at"]), reverse=False)
+    # Merge AI-discovered connections
+    ai_conns = get_ai_connections(card_id)
+    seen = {c["id"] for c in result}
+    for ac in ai_conns:
+        if ac["id"] not in seen:
+            ac["ai_reason"] = ac.pop("reason", "")
+            result.append(ac)
     return result[:limit]
 
 
@@ -589,8 +621,9 @@ def import_cards(cards_list, merge=False):
         conn.execute(
             """INSERT INTO cards
                (scene_type, title, summary, personal, source_kind, source_ref,
-                image_url, tags, source_date, status, recall_enabled, batch_id, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                image_url, tags, source_date, status, recall_enabled, batch_id, created_at,
+                last_recalled, recall_count, next_recall, recall_interval, difficulty, recall_seconds)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 cd.get("scene_type", "custom"),
                 title,
@@ -605,6 +638,12 @@ def import_cards(cards_list, merge=False):
                 int(cd.get("recall_enabled", False)),
                 cd.get("batch_id", ""),
                 cd.get("created_at") or datetime.now().strftime("%Y-%m-%d %H:%M"),
+                cd.get("last_recalled"),
+                cd.get("recall_count", 0),
+                cd.get("next_recall"),
+                cd.get("recall_interval", 1),
+                cd.get("difficulty", 0),
+                cd.get("recall_seconds", 0),
             ),
         )
         imported += 1
@@ -663,10 +702,21 @@ def graph_data(limit=200):
                 tag_nodes[tid] = {"id": tid, "name": t, "count": 0}
             tag_nodes[tid]["count"] += 1
             links.append({"source": cid, "target": tid})
+    # Add AI-discovered connections as separate links
+    ai_links = []
+    try:
+        conn2 = get_db()
+        ai_rows = conn2.execute("SELECT card_a, card_b, reason, locked FROM ai_connections").fetchall()
+        for ar in ai_rows:
+            ai_links.append({"source": "card-" + str(ar["card_a"]), "target": "card-" + str(ar["card_b"]), "reason": ar["reason"] or "", "ai": True, "locked": bool(ar["locked"])})
+        conn2.close()
+    except Exception:
+        pass
     return {
         "cards": cards,
         "tags": sorted(tag_nodes.values(), key=lambda n: -n["count"]),
         "links": links,
+        "ai_links": ai_links,
     }
 
 
@@ -720,3 +770,285 @@ def rename_tag(old_tag, new_tag):
     conn.commit()
     conn.close()
     return updated
+
+
+# ========== AI Connections ==========
+
+def save_ai_connections(pairs):
+    """Incremental merge: add only NEW connection pairs, keep existing ones.
+
+    Existing connections (especially locked ones) are never overwritten.
+    Returns the count of newly added connections."""
+    conn = get_db()
+    existing = set()
+    for r in conn.execute("SELECT card_a, card_b FROM ai_connections").fetchall():
+        key = (min(r["card_a"], r["card_b"]), max(r["card_a"], r["card_b"]))
+        existing.add(key)
+    added = 0
+    for p in pairs:
+        a, b = int(p["a"]), int(p["b"])
+        key = (min(a, b), max(a, b))
+        if key not in existing:
+            conn.execute(
+                "INSERT INTO ai_connections (card_a, card_b, reason) VALUES (?,?,?)",
+                (a, b, p.get("reason", "")),
+            )
+            existing.add(key)
+            added += 1
+    conn.commit()
+    conn.close()
+    return added
+
+
+def get_ai_connections(card_id):
+    """Get AI-discovered connections involving a specific card."""
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT card_a, card_b, reason, created_at FROM ai_connections
+           WHERE card_a = ? OR card_b = ?""",
+        (card_id, card_id),
+    ).fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        other_id = r["card_b"] if r["card_a"] == card_id else r["card_a"]
+        card = get_card(other_id)
+        if card:
+            card["reason"] = r["reason"] or ""
+            card["created_at"] = r["created_at"]
+            result.append(card)
+    return result
+
+
+def all_ai_connections():
+    """Return all AI connections for graph rendering."""
+    conn = get_db()
+    rows = conn.execute("SELECT card_a, card_b, reason, locked FROM ai_connections").fetchall()
+    conn.close()
+    return [{"a": r["card_a"], "b": r["card_b"], "reason": r["reason"] or "", "locked": bool(r["locked"])} for r in rows]
+
+
+def has_ai_connections():
+    """Check if any AI connections exist."""
+    conn = get_db()
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM ai_connections").fetchone()[0]
+    except Exception:
+        count = 0
+    conn.close()
+    return count > 0
+
+
+def clear_ai_connections():
+    """Delete UNLOCKED AI connections only. Locked ones are preserved."""
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM ai_connections WHERE locked = 0")
+        conn.commit()
+    except Exception:
+        pass
+    conn.close()
+
+
+def toggle_connection_lock(card_a, card_b):
+    """Toggle the locked status of a specific connection pair.
+    Returns the new locked state (True/False)."""
+    conn = get_db()
+    lo = min(card_a, card_b)
+    hi = max(card_a, card_b)
+    row = conn.execute(
+        "SELECT locked FROM ai_connections WHERE card_a=? AND card_b=?",
+        (lo, hi),
+    ).fetchone()
+    if not row:
+        # Try reversed order
+        row = conn.execute(
+            "SELECT locked FROM ai_connections WHERE card_a=? AND card_b=?",
+            (hi, lo),
+        ).fetchone()
+    if not row:
+        conn.close()
+        return False
+    new_state = 0 if row["locked"] else 1
+    conn.execute(
+        "UPDATE ai_connections SET locked=? WHERE (card_a=? AND card_b=?) OR (card_a=? AND card_b=?)",
+        (new_state, lo, hi, hi, lo),
+    )
+    conn.commit()
+    conn.close()
+    return bool(new_state)
+
+
+# ========== Narratives ==========
+
+def save_narrative(title, body, date_start=None, date_end=None, ai_used=False):
+    conn = get_db()
+    cur = conn.execute(
+        """INSERT INTO narratives (title, body, date_start, date_end, ai_used)
+           VALUES (?,?,?,?,?)""",
+        (title, body, date_start, date_end, int(bool(ai_used))),
+    )
+    conn.commit()
+    nid = cur.lastrowid
+    conn.close()
+    return nid
+
+
+def list_narratives():
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM narratives ORDER BY created_at DESC"
+        ).fetchall()
+    except Exception:
+        conn.close()
+        return []
+    result = []
+    for r in rows:
+        result.append({
+            "id": r["id"],
+            "title": r["title"],
+            "body": r["body"] or "",
+            "date_start": r["date_start"],
+            "date_end": r["date_end"],
+            "ai_used": bool(r["ai_used"]),
+            "created_at": r["created_at"],
+        })
+    conn.close()
+    return result
+
+
+def get_narrative(nid):
+    conn = get_db()
+    r = conn.execute("SELECT * FROM narratives WHERE id = ?", (nid,)).fetchone()
+    conn.close()
+    if not r:
+        return None
+    return {
+        "id": r["id"], "title": r["title"], "body": r["body"] or "",
+        "date_start": r["date_start"], "date_end": r["date_end"],
+        "ai_used": bool(r["ai_used"]), "created_at": r["created_at"],
+    }
+
+
+def delete_narrative(nid):
+    conn = get_db()
+    conn.execute("DELETE FROM narratives WHERE id = ?", (nid,))
+    conn.commit()
+    conn.close()
+
+
+# ========== Full Snapshot Export / Smart Import ==========
+
+def export_full_snapshot():
+    """Export ALL data: cards, narratives, ai_connections.
+    This is a true backup — nothing is lost on restore."""
+    cards = export_cards_data()
+    narratives = list_narratives()
+    ai_conns = all_ai_connections()
+    return {
+        "version": 2,
+        "exported_at": datetime.now().isoformat(),
+        "cards": cards,
+        "narratives": narratives,
+        "ai_connections": ai_conns,
+    }
+
+
+def smart_import(snapshot):
+    """Import a full snapshot with merge intelligence.
+    - Cards matched by title+source_date: update if incoming is newer.
+    - Narratives and AI connections: append (idempotent on re-import by title).
+    Returns (cards_imported, cards_updated, cards_skipped)."""
+    imported = 0
+    updated = 0
+    skipped = 0
+    conn = get_db()
+
+    cards_list = snapshot.get("cards", [])
+    for cd in cards_list:
+        title = cd.get("title", "")
+        source_date = cd.get("source_date", "")
+        existing = conn.execute(
+            "SELECT id, created_at FROM cards WHERE title = ? AND source_date = ? AND status != 'deleted'",
+            (title, source_date),
+        ).fetchone()
+        if existing:
+            # Card exists — update only if incoming has newer or equal created_at
+            # and preserve the newer recall progress
+            in_created = cd.get("created_at") or ""
+            if in_created and in_created >= (existing["created_at"] or ""):
+                # Smart merge: take the higher recall_count (more progress = keep)
+                conn.execute(
+                    """UPDATE cards SET summary=?, personal=?, tags=?, image_url=?,
+                       status=?, recall_enabled=?, batch_id=?,
+                       last_recalled=?, recall_count=max(recall_count, ?),
+                       next_recall=?, recall_interval=?, difficulty=?,
+                       recall_seconds=max(recall_seconds, ?)
+                       WHERE id=?""",
+                    (cd.get("summary", ""), cd.get("personal", ""),
+                     json.dumps(cd.get("tags", []), ensure_ascii=False),
+                     cd.get("image_url", ""), cd.get("status", "confirmed"),
+                     int(cd.get("recall_enabled", False)), cd.get("batch_id", ""),
+                     cd.get("last_recalled"), cd.get("recall_count", 0),
+                     cd.get("next_recall"), cd.get("recall_interval", 1),
+                     cd.get("difficulty", 0), cd.get("recall_seconds", 0),
+                     existing["id"]),
+                )
+                updated += 1
+            else:
+                skipped += 1
+        else:
+            conn.execute(
+                """INSERT INTO cards
+                   (scene_type, title, summary, personal, source_kind, source_ref,
+                    image_url, tags, source_date, status, recall_enabled, batch_id, created_at,
+                    last_recalled, recall_count, next_recall, recall_interval, difficulty, recall_seconds)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (cd.get("scene_type", "custom"), title,
+                 cd.get("summary", ""), cd.get("personal", ""),
+                 cd.get("source_kind", "text"), cd.get("source_ref", ""),
+                 cd.get("image_url", ""),
+                 json.dumps(cd.get("tags", []), ensure_ascii=False),
+                 source_date or datetime.now().strftime("%Y-%m-%d"),
+                 cd.get("status", "confirmed"), int(cd.get("recall_enabled", False)),
+                 cd.get("batch_id", ""),
+                 cd.get("created_at") or datetime.now().strftime("%Y-%m-%d %H:%M"),
+                 cd.get("last_recalled"), cd.get("recall_count", 0),
+                 cd.get("next_recall"), cd.get("recall_interval", 1),
+                 cd.get("difficulty", 0), cd.get("recall_seconds", 0)),
+            )
+            imported += 1
+
+    # Import narratives (skip by title to avoid duplicates)
+    for narr in snapshot.get("narratives", []):
+        title = narr.get("title", "")
+        exists = conn.execute(
+            "SELECT id FROM narratives WHERE title = ?", (title,)
+        ).fetchone()
+        if not exists:
+            conn.execute(
+                """INSERT INTO narratives (title, body, date_start, date_end, ai_used, created_at)
+                   VALUES (?,?,?,?,?,?)""",
+                (title, narr.get("body", ""), narr.get("date_start"),
+                 narr.get("date_end"), int(narr.get("ai_used", False)),
+                 narr.get("created_at")),
+            )
+
+    # Import AI connections (skip exact duplicates)
+    for ac in snapshot.get("ai_connections", []):
+        a, b = ac.get("a"), ac.get("b")
+        reason = ac.get("reason", "")
+        exists = conn.execute(
+            "SELECT id FROM ai_connections WHERE card_a=? AND card_b=? AND reason=?",
+            (a, b, reason),
+        ).fetchone()
+        if not exists:
+            conn.execute(
+                "INSERT INTO ai_connections (card_a, card_b, reason) VALUES (?,?,?)",
+                (a, b, reason),
+            )
+
+    conn.commit()
+    conn.close()
+    return imported, updated, skipped

@@ -18,8 +18,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     if (state.animId) cancelAnimationFrame(state.animId);
     if (state.tooltip) state.tooltip.remove();
     if (state.clusterLabels) state.clusterLabels.forEach(function (l) { l.el.remove(); });
-    if (state.help) state.help.remove();
-    if (state.renderer) {
+      if (state.renderer) {
       state.renderer.dispose();
       var el = state.renderer.domElement;
       if (el && el.parentNode) el.parentNode.removeChild(el);
@@ -82,23 +81,24 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
-  function render(container, data, onCardClick) {
+  function render(container, data, onCardClick, onToggleLock) {
     dispose();
     var cards = (data.cards || []).slice();
     var links = data.links || [];
+    var aiLinks = data.ai_links || [];
     if (!cards.length) {
       container.innerHTML = '<div class="graph-empty">\u8fd8\u6ca1\u6709\u8db3\u591f\u5361\u7247\u3002\u5148\u91c7\u96c6\u5e76\u8865\u5145\u6807\u7b7e\uff0c\u56fe\u8c31\u4f1a\u81ea\u52a8\u6d6e\u73b0\u8054\u7ed3\u3002</div>';
       return;
     }
     try {
-      _build(container, cards, links, onCardClick);
+      _build(container, cards, links, onCardClick, aiLinks, onToggleLock);
     } catch (e) {
       console.warn('3D graph build failed:', e);
       container.innerHTML = '<div class="graph-empty">3D \u56fe\u8c31\u521d\u59cb\u5316\u5931\u8d25\uff1a' + escH(e.message) + '</div>';
     }
   }
 
-  function _build(container, cards, links, onCardClick) {
+  function _build(container, cards, links, onCardClick, aiLinks, onToggleLock) {
     container.innerHTML = '';
     container.style.position = 'relative';
     var W = Math.max(container.clientWidth || 760, 320);
@@ -280,6 +280,38 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         blending: THREE.AdditiveBlending, depthWrite: false
       })));
     }
+    // ---- AI-discovered connections (dashed-looking lines, hover for reason) ----
+    var aiLines = [];
+    if (aiLinks && aiLinks.length) {
+      aiLinks.forEach(function(al) {
+        var idA = String(al.source || '').replace('card-', '');
+        var idB = String(al.target || '').replace('card-', '');
+        var cardA = byId[idA], cardB = byId[idB];
+        if (!cardA || !cardB || !cardA._p || !cardB._p) return;
+        var lg = new THREE.BufferGeometry();
+        lg.setAttribute('position', new THREE.Float32BufferAttribute([
+          cardA._p.x, cardA._p.y, cardA._p.z, cardB._p.x, cardB._p.y, cardB._p.z
+        ], 3));
+        var lm = new THREE.LineBasicMaterial({
+          color: 0x22d3ee, transparent: true, opacity: 0.5,
+          blending: THREE.AdditiveBlending, depthWrite: false
+        });
+        var line = new THREE.Line(lg, lm);
+        var locked = !!al.locked;
+        line.userData = {
+          ai: true, reason: al.reason || '',
+          pa: cardA._p.clone(), pb: cardB._p.clone(),
+          titleA: cardA.title || '', titleB: cardB.title || '',
+          locked: locked,
+          cardA: parseInt(idA, 10) || 0,
+          cardB: parseInt(idB, 10) || 0
+        };
+        line.material.color.setHex(locked ? 0xffffff : 0x22d3ee);
+        line.material.opacity = locked ? 0.9 : 0.5;
+        scene.add(line);
+        aiLines.push(line);
+      });
+    }
     // Also create individual pickable line objects with tag metadata for hover tooltips
     Object.keys(tagToCards).forEach(function (tag) {
       var group = tagToCards[tag];
@@ -324,14 +356,6 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
       'backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);';
     container.appendChild(tip);
 
-    // ---- Help ----
-    var help = document.createElement('div');
-    help.textContent = "\u62d6\u62fd\u65cb\u8f6c \u00b7 \u6eda\u8f6e\u7f29\u653e \u00b7 \u70b9\u51fb\u661f\u70b9\u67e5\u770b\u8be6\u60c5";
-    help.style.cssText = 'position:absolute;bottom:14px;left:50%;transform:translateX(-50%);' +
-      'font-size:11px;color:rgba(255,255,255,0.25);pointer-events:none;z-index:1;white-space:nowrap;' +
-      'letter-spacing:1px;';
-    container.appendChild(help);
-
     // ---- Raycasting ----
     var ray = new THREE.Raycaster();
     var mouse = new THREE.Vector2(-999, -999);
@@ -346,7 +370,16 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     renderer.domElement.addEventListener('pointerleave', function () { mouse.x = -999; mouse.y = -999; });
     renderer.domElement.addEventListener('click', function (e) {
       if (pointerDown && (Math.abs(e.clientX - pointerDown.x) > 5 || Math.abs(e.clientY - pointerDown.y) > 5)) return;
-      if (hov && onCardClick) { e.stopPropagation(); onCardClick(hov.userData.card); }
+      if (hov && onCardClick) { e.stopPropagation(); onCardClick(hov.userData.card); return; }
+      if (state.hovAiLine && onToggleLock) {
+        e.stopPropagation();
+        var ud = state.hovAiLine.userData;
+        onToggleLock(ud.cardA, ud.cardB).then(function(locked) {
+          ud.locked = locked;
+          state.hovAiLine.material.color.setHex(locked ? 0xffffff : 0x22d3ee);
+          state.hovAiLine.material.opacity = locked ? 0.9 : 0.5;
+        });
+      }
     });
 
     function project(p) {
@@ -362,11 +395,42 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
       controls.update();
       ray.setFromCamera(mouse, camera);
       ray.params.Points.threshold = 3;
-      ray.params.Line.threshold = 6;
       var hits = ray.intersectObjects(meshes, false);
       var nh = hits.length > 0 ? hits[0].object : null;
-      var lHits = ray.intersectObjects(tagLines, false);
-      var nl = lHits.length > 0 ? lHits[0].object : null;
+      // Screen-space line picking: find the line whose projected image
+      // is visually closest to the mouse cursor (not 3D ray distance).
+      var mx = mouse.x, my = mouse.y;
+      function pickLine(arr) {
+        if (!arr.length || mx < -1) return null;
+        var rc = renderer.domElement.getBoundingClientRect();
+        var mpx = ((mx + 1) / 2) * rc.width;
+        var mpy = ((1 - my) / 2) * rc.height;
+        var best = null, bestDist = 15;
+        for (var i = 0; i < arr.length; i++) {
+          var L = arr[i];
+          var ud = L.userData;
+          if (!ud || !ud.pa || !ud.pb) continue;
+          var va = ud.pa.clone().project(camera);
+          var vb = ud.pb.clone().project(camera);
+          if (va.z > 1 && vb.z > 1) continue;
+          var ax = (va.x + 1) / 2 * rc.width, ay = (1 - va.y) / 2 * rc.height;
+          var bx = (vb.x + 1) / 2 * rc.width, by = (1 - vb.y) / 2 * rc.height;
+          var dx = bx - ax, dy = by - ay;
+          var len2 = dx * dx + dy * dy;
+          var t = 0;
+          if (len2 > 0.01) {
+            t = ((mpx - ax) * dx + (mpy - ay) * dy) / len2;
+            t = Math.max(0, Math.min(1, t));
+          }
+          var px = ax + t * dx, py = ay + t * dy;
+          var ddx = mpx - px, ddy = mpy - py;
+          var dist = Math.sqrt(ddx * ddx + ddy * ddy);
+          if (dist < bestDist) { bestDist = dist; best = L; }
+        }
+        return best;
+      }
+      var nl = pickLine(tagLines);
+      var nai = pickLine(aiLines);
       if (nh !== hov) {
         if (hov) {
           hov.userData.innerGlow.material.opacity = 0.5;
@@ -379,7 +443,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
           hov.userData.outerGlow.material.opacity = 0.4;
           hov.scale.setScalar(1.8);
           renderer.domElement.style.cursor = 'pointer';
-        } else if (!nl) { renderer.domElement.style.cursor = state.hovLine ? 'pointer' : 'grab'; }
+        } else if (!nl && !nai) { renderer.domElement.style.cursor = 'grab'; }
       }
       // Tag line hover: brighten line + show tag tooltip
       if (nl !== state.hovLine) {
@@ -390,6 +454,28 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
           nl.material.color.setHex(0xfff3c4);
           renderer.domElement.style.cursor = 'pointer';
         }
+      }
+      // AI line hover: brighten line
+      if (nai !== state.hovAiLine) {
+        if (state.hovAiLine) {
+          var oud = state.hovAiLine.userData;
+          state.hovAiLine.material.color.setHex(oud.locked ? 0xffffff : 0x22d3ee);
+          state.hovAiLine.material.opacity = oud.locked ? 0.9 : 0.5;
+        }
+        state.hovAiLine = nai;
+        if (nai) {
+          nai.material.opacity = 1;
+          nai.material.color.setHex(0x7dd3fc);
+          renderer.domElement.style.cursor = 'pointer';
+        }
+      }
+      // Gentle pulse on non-hovered AI lines to invite interaction
+      var aiPulse = 0.35 + Math.sin(t * 1.4) * 0.15;
+      var lockPulse = 0.7 + Math.sin(t * 1.0) * 0.1;
+      for (var ai = 0; ai < aiLines.length; ai++) {
+        var aL = aiLines[ai];
+        if (aL === state.hovAiLine) continue;
+        aL.material.opacity = aL.userData.locked ? lockPulse : aiPulse;
       }
       var fq = state.filterQuery;
       for (var k = 0; k < meshes.length; k++) {
@@ -438,6 +524,20 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         tip.style.top = Math.max(pp.y - 20, 0) + 'px';
         tip.innerHTML = '<div style="font-weight:600;color:#fbbf24">#' + escH(state.hovLine.userData.tag) + '</div>' +
           '<div style="font-size:11px;color:#94a3b8;margin-top:2px">\u5171\u4eab\u6807\u7b7e\u8054\u7ed3</div>';
+      } else if (state.hovAiLine) {
+        var am = state.hovAiLine.userData.pa.clone().lerp(state.hovAiLine.userData.pb, 0.5);
+        var ap = project(am);
+        tip.style.display = 'block';
+        tip.style.left = Math.min(ap.x + 18, renderer.domElement.clientWidth - 280) + 'px';
+        tip.style.top = Math.max(ap.y - 20, 0) + 'px';
+        var ud2 = state.hovAiLine.userData;
+        var lockBadge = ud2.locked
+          ? '<span style="color:#ffffff">\uD83D\uDD12 \u5df2\u9501\u5b9a</span>'
+          : '<span style="color:#64748b">\uD83D\uDD13 \u70b9\u51fb\u9501\u5b9a</span>';
+        tip.innerHTML = '<div style="font-weight:600;color:' + (ud2.locked ? '#ffffff' : '#22d3ee') + '">\uD83E\uDDE0 AI \u53d1\u73b0\u7684\u8054\u7ed3 ' + lockBadge + '</div>' +
+          '<div style="font-size:12px;color:#e2e8f0;margin-top:4px;line-height:1.6">' + escH(ud2.reason) + '</div>' +
+          '<div style="font-size:11px;color:#94a3b8;margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.08)">' +
+          escH(ud2.titleA) + ' \u2194 ' + escH(ud2.titleB) + '</div>';
       } else { tip.style.display = 'none'; }
       for (var ci = 0; ci < cLabels.length; ci++) {
         var cp = project(cLabels[ci].pos);
@@ -457,7 +557,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     }
     window.addEventListener('resize', onResize);
 
-    state = { renderer: renderer, controls: controls, tooltip: tip, clusterLabels: cLabels, help: help, animId: null, onResize: onResize, meshes: meshes, filterQuery: '', hovLine: null };
+    state = { renderer: renderer, controls: controls, tooltip: tip, clusterLabels: cLabels, animId: null, onResize: onResize, meshes: meshes, filterQuery: '', hovLine: null, hovAiLine: null };
     animate();
   }
 

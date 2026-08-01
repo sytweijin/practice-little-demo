@@ -1,241 +1,70 @@
-﻿# CHANGELOG
+# CHANGELOG
 
-本文件记录“在场 — AI 记忆工坊”的重要变更。格式遵循团队约定：每条记录包含问题 / 修改前 / 修改后 / 为什么这样改 / 收益，按优先级分组。
+## v0.8 -- AI 联结、叙事回顾与真实可用性（2026-08-01）
+
+**定位：** 从"单机记忆工具"进化为"有认知深度的个人记忆系统"。新增 AI 跨场景联结发现、月度叙事回顾、跨设备智能同步，并修复了影响信任度的数据保真与诚实度问题。
+
+### 新功能
+
+#### 1. AI 联结发现（增量 + 可锁定）
+
+让 AI 扫描全库，发现跨场景的深层概念联结（如"非遗匠人的虔诚"与"开源工程师的理想"共享同一种对技艺的敬畏）。
+
+- **增量保存**：每次发现只添加新联结，已有的不覆盖。添加新卡片后再次发现，会在已有基础上扩展
+- **点击锁定**：在记忆星图中上点击任意青色 AI 联结线即可锁定（变为白色），锁定的不会被清除
+- **选择性清除**：清除只删除未锁定的联结，保留你认可的部分
+- 3D 图谱使用屏幕空间像素距离做线条拾取，鼠标靠近哪根线就选中哪根
+
+#### 2. 月度叙事回顾
+
+让 AI 将一个月的记忆碎片织成一篇有主题的回顾文章，串联场景间的深层联系。
+
+- 跟随时间线当前选中月份生成（不再是写死当前月）
+- 无卡片的月份自动回退到最近有卡片的月份
+- 回顾可保存/删除，标注是否为 AI 真实生成
+
+#### 3. 跨设备智能同步
+
+- 导出快照包含全部数据（卡片 + 叙事 + AI 联结）
+- 智能导入按标题 + 日期去重，回忆进度取较高值，不覆盖更新版本
+- 修复了旧版导出/导入丢失回忆进度（6 个字段被丢弃）的数据保真问题
+
+#### 4. PWA 分享接收
+
+其他 App（相册、文件管理器）可直接分享照片/文件到"在场"，自动填入采集区。
+
+#### 5. 快速/深度模式
+
+新增"一键记录"开关：跳过 AI 筛选，拍摄即存卡。默认深度模式由 AI 判断哪些值得留存。
+
+### 修复
+
+- **导出/导入丢字段**：`import_cards` 现在保留全部 19 个字段，包括回忆进度
+- **OpenAI 路径模型不可配**：视觉模型名改为 `OPENAI_VISION_MODEL` 环境变量（默认 gpt-4o），与文本模型一致
+- **月度回顾生成失败**：前端写死用 `new Date()` 导致选错月份，已改为跟随时间线
+- **3D 图谱线条悬停不准**：从 3D 射线检测改为屏幕空间像素距离，所见即所选
+- **联结线颜色混淆**：锁定线改为白色，与青色未锁定线和金色标签线明确区分
+- **个人归因引导**：新卡片 personal 为空时标注"待你赋予意义"
+- **回退诚实度**：无 AI Key 时明确标注"占位卡片"，不再伪装成 AI 结论
+- **uvicorn 自动重载**：改用 import string，改 Python 代码后服务器自动重启
+
+---
+
+## v0.7 -- 3D 记忆星图 + 工具栏优化（2026-07-31）
+
+- 记忆图谱升级为 Three.js 3D 星空：场景化分星团、深空恒星场 + 星云、双层光晕呼吸脉动
+- 拖拽旋转、滚轮缩放、点击星点查看详情、悬停毛玻璃 tooltip、关键词搜索高亮过滤
+- 共享标签的金色光线连接，加载失败自动回退 2D 图谱
+- 工具栏优化：档案选择/新建/安装按钮同行平铺，修复按钮文字竖排（flex: 0 0 auto）
+
+---
 
 ## v0.6 -- 从演示走向日常可用（2026-07-31）
 
-**定位：** 修复手机端现场采集与局域网访问的硬伤，补上断网采集、到期提醒、多档案、记忆图谱与真实账单，让项目从参赛演示升级为可日常使用的小工具。
-
-**审查/修改背景：** 真机体验发现 0.0.0.0 无法访问、部分浏览器录音无响应、桌面拍照/录像与上传行为混淆；评审同时提出手机接口、断网现场采集、真实账单、推送提醒、记忆联结等提升点。
-
-### 修复（2026-07-31 追加）
-
-- 回忆挑战 / 记忆图谱点击无响应：panel-calendar 缺少闭合 div，导致两个面板嵌套进时间线面板内；补上闭合标签，恢复独立面板切换。
-- 工具栏多余空白：demo-toolbar 使用 space-between 把安装按钮推到最右；改为 flex-start，让按钮紧邻档案区。
-- PWA 缓存升级到 presence-v3，避免旧静态资源缓存干扰功能更新。
-### v0.7 -- 3D 记忆星图 + 工具栏优化（2026-07-31）
-
-**记忆图谱升级为 3D 星空：**
-- 每种场景（企业参访、展览、会议等）自动形成一个星团，卡片是星团中的发光星点
-- 深空背景：三层恒星场（蓝白/白/黄白/橙红光谱）+ 五团星云 + 雾化景深，卡片星点有双层光晕呼吸脉动
-- 支持拖拽旋转、滚轮缩放、点击星点查看详情、悬停显示毛玻璃 tooltip
-- 共享标签的卡片之间用金色光线连接，悬停光线显示标签名
-- 关键词搜索过滤：输入后匹配星点高亮放大，其余暗淡，快速定位目标记忆
-- 自动缓慢旋转，用户交互后停止；加载失败时自动回退到 2D 图谱
-
-**工具栏优化：**
-- 去掉嵌套的 profile-box 包裹层，档案选择/新建/安装按钮改为同一行平铺
-- 修复 btn-primary 的 flex-basis:0% 导致按钮文字竖排的问题（改为 flex: 0 0 auto）
-- 下拉框精致化：自定义箭头、hover/focus 发光、option 样式
-
-**其他修复：**
-- 星图白底修复（渲染器去掉 alpha:true，显式设置深空背景色）
-- 星团标注文字增强可见度（透明度 0.12 → 0.42，加暗色描边）
-- 核心主张图标精致化（加圆角徽章底色）
-- panel-calendar 缺少闭合标签导致回忆挑战/记忆星图面板无法切换（已修复）
-### P0（关键缺陷）
-
-#### 1. 手机端录音/拍照/录像与 HTTPS 局域网访问
-
-**问题：** 手机在部分浏览器点录音没有可用方式，0.0.0.0 地址手机/电脑都打不开，且电脑端拍照录像按钮与上传文件行为混淆。
-
-**修改前：**
-```python
-# main.py 仅监听 0.0.0.0 的 HTTP，手机在局域网会被浏览器判为非安全上下文
-uvicorn.run(app, host="0.0.0.0", port=8001)
-```
-```js
-// app.js 录音依赖 getUserMedia，在非 HTTPS 局域网直接被跳过
-if (!canRecord) { fb.click(); return; }
-```
-
-**修改后：**
-```python
-# main.py 启动时自动生成/续期含局域网 IP 的 SAN 自签证书，以 HTTPS 提供服务
-cert = _ensure_cert(ip)
-uvicorn.run(app, host="0.0.0.0", port=8001,
-            ssl_certfile=cert[0], ssl_keyfile=cert[1])
-```
-```js
-// app.js 桌面非触屏走浏览器内摄像头拍照/录像；手机继续走原生相机
-camBtn.onclick = () => openCameraCapture("photo", camInput);
-vidBtn.onclick = () => openCameraCapture("video", vidInput);
-```
-
-**为什么这样改：** 录音/摄像头 API 要求安全上下文，只有 HTTPS（或 localhost）才可用；自签证书自动包含 127.0.0.1 与局域网 IP，使手机能直接访问。
-
-**收益：** 手机浏览器内录音、拍照、录像真正可用；电脑与手机使用统一 https 地址，不再需要额外配置。
-
-### P1（健壮性提升）
-
-#### 2. 断网现场采集暂存与自动同步
-
-**问题：** 现场网络不好时，点击生成会直接失败，采集内容可能丢失。
-
-**修改前：**
-```js
-} catch (e) {
-  alert("分析失败：" + e.message);
-}
-```
-
-**修改后：**
-```js
-} catch (e) {
-  if (!navigator.onLine || e instanceof TypeError) {
-    await queueOfflineAnalyze({ scene_type: selectedScenario, personalization, notes, files: selectedFiles.slice() });
-    renderOfflineStatus("网络不可用，本次采集已暂存，联网后自动同步");
-  } else {
-    alert("分析失败：" + e.message);
-  }
-}
-```
-
-**为什么这样改：** 把 File/Blob 与备注写入 IndexedDB，监听 online 事件自动重试，采集不再依赖网络瞬时可用。
-
-**收益：** 弱网/断网现场也能随手拍随手录；联网后一键同步，不丢素材。
-
-#### 3. 到期回忆提醒与回忆投入计时
-
-**问题：** 回忆只能靠用户主动打开页面，且账单无法体现真实复习投入。
-
-**修改前：**
-```js
-b.onclick = async () => {
-  await api("/api/recall/" + card.id + "/attempt", { ... });
-};
-```
-
-**修改后：**
-```js
-b.onclick = async () => {
-  const secs = Math.max(1, Math.round((Date.now() - recallStartTs) / 1000));
-  await api("/api/recall/" + card.id + "/attempt", { ..., body: JSON.stringify({ difficulty, seconds: secs }) });
-};
-```
-
-**为什么这样改：** 到期提醒需要浏览器通知授权，且回忆时长应随难度一起入库，才能让账单诚实反映用户投入。
-
-**收益：** 到期卡片会收到通知提醒；复习时长进入认知账单，形成可解释的真实数据。
-
-#### 4. 多档案本地隔离
-
-**问题：** 单机单数据库，家人或同事共用一台电脑时数据互相混杂。
-
-**修改前：**
-```python
-DB_PATH = Path(__file__).parent / "data" / "memory.db"
-```
-
-**修改后：**
-```python
-def _db_path():
-    name = current_profile()
-    if name == "default":
-        return DB_DIR / "memory.db"
-    return DB_DIR / ("memory_" + name + ".db")
-```
-```python
-class ProfileMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        profile = request.headers.get("X-Presence-Profile", "") or request.cookies.get("presence_profile", "")
-        if profile:
-            memory.set_profile(profile)
-```
-
-**为什么这样改：** 多档案采用“请求上下文 + 独立 SQLite 文件”的最简方案，前端切换档案即切换数据库，数据完全隔离。
-
-**收益：** 同一台电脑可多人各自管理记忆库；配合 JSON 导出/导入实现最简跨设备迁移。
-
-### P2（体验优化）
-
-#### 5. 认知账单：真实时间与估算对照
-
-**问题：** “节省时间”是固定系数估算，用户会觉得数据是编出来的。
-
-**修改前：**
-```python
-minutes = len(materials) * scenario["minutes_per_material"]
-memory.record_ledger(scene_type, len(materials), minutes, len(saved))
-```
-
-**修改后：**
-```python
-t0 = time.monotonic()
-cards_data = llm.analyze_materials(materials, scene_type, personalization)
-ai_seconds = max(0.0, time.monotonic() - t0)
-memory.record_ledger(..., ai_seconds=ai_seconds)
-```
-
-**为什么这样改：** AI 处理时长按真实调用计时，复习时长按用户操作计时，估算仅保留为“对照参考”。
-
-**收益：** 账单从“估算值”变成“真实测量 + 估算对照”，重建数据可信度。
-
-#### 6. 记忆图谱
-
-**问题：** 记忆之间的联结停留在文案里，没有可视化入口。
-
-**修改前：** 仅卡片详情内按共享标签列出“相关记忆”。
-
-**修改后：**
-```python
-@app.get("/api/graph")
-def api_graph(limit: int = 200):
-    return memory.graph_data(limit)
-```
-```js
-// app.js 新增图谱 tab：卡片-标签二部图 + 简单力导向布局
-svg += '<rect ... stroke="' + color + '" .../>';
-svg += '<text ...>' + esc(truncateLabel(n.label, 14)) + "</text>";
-```
-
-**为什么这样改：** 用标签作为联结边，把孤立卡片变成可点击浏览的记忆网络。
-
-**收益：** 跨场景联结直观可见，点击卡片即可回到详情，强化“AI 守联结”的产品主张。
-
-#### 7. PWA 安装与离线壳
-
-**问题：** 手机每次都要开浏览器输网址，依赖网络才能打开。
-
-**修改前：**
-```json
-{ "start_url": "/", "display": "standalone" }
-```
-
-**修改后：**
-```json
-{ "id": "/", "scope": "/", "display_override": ["standalone", "minimal-ui"] }
-```
-```js
-window.addEventListener("beforeinstallprompt", function(e) {
-  e.preventDefault();
-  deferredInstallPrompt = e;
-  document.getElementById("installBtn").style.display = "inline-flex";
-});
-```
-
-**为什么这样改：** manifest 补全安装元数据，Service Worker 缓存应用壳，浏览器提供安装入口。
-
-**收益：** 桌面/手机可安装为独立应用；断网仍能打开界面并暂存采集。
-
-### P3（打磨）
-
-#### 8. README 与数据模型同步
-
-**问题：** README 的“无用户系统/无移动端优化”描述已与实现不符，数据模型缺新字段。
-
-**修改前：**
-```
-- 无用户系统：当前为单用户设计，不支持多用户隔离
-- 无移动端优化：尽管响应式设计适配了手机屏幕，但上传等操作在移动端体验不佳
-```
-
-**修改后：**
-```
-- 同步仍是手动边界：多档案为本地优先，跨设备同步依赖 JSON 导出/导入
-- 音频转写（配置式）：无 API Key 时录音作为素材随卡片归档；配置 DashScope 或 OpenAI Key 后自动转写，转写文本参与卡片筛选与总结生成
-```
-
-**为什么这样改：** 文档需反映当前真实能力与边界，避免“承诺-实现”落差。
-
-**收益：** README 与代码行为一致，评委和用户看到的是真实可用的版本。
+- HTTPS 自签证书：手机浏览器内录音/拍照/录像真正可用（安全上下文）
+- 断网采集暂存：File/Blob + 备注写入 IndexedDB，联网自动同步
+- 到期回忆提醒：浏览器通知 + 回忆投入计时
+- 多档案本地隔离：请求上下文 + 独立 SQLite 文件
+- 认知账单：AI 实际处理时长 + 复习投入时长 + 估算对照
+- 记忆图谱：卡片-标签二部图 + 力导向布局
+- PWA 安装与离线壳

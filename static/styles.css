@@ -982,3 +982,119 @@ video.mem-card-img { width: 100%; height: 180px; object-fit: cover; border-radiu
   .graph-search-input { flex: 1; width: auto; }
 }
 
+
+/* ===== Enhancements ===== */
+.mem-card-personal-empty {
+  font-size: 12px;
+  color: var(--ink-faint);
+  padding: 6px 10px;
+  margin-top: 6px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s;
+}
+.mem-card-personal-empty:hover {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+.recall-clue-media {
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+
+/* AI semantic connections */
+.conn-ai {
+  border-left: 3px solid #D97706 !important;
+  background: rgba(217, 119, 6, 0.04);
+}
+.conn-ai-reason {
+  display: block;
+  font-size: 12px;
+  color: #B45309;
+  font-style: italic;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+#discoverConnBtn {
+  font-size: 13px;
+  transition: transform 0.1s;
+}
+#discoverConnBtn:active {
+  transform: scale(0.96);
+}
+
+/* ===== Modal action buttons (compact, even) ===== */
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+.modal-btn {
+  flex: 1;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--ink);
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: center;
+  white-space: nowrap;
+}
+.modal-btn:hover {
+  background: var(--amber);
+  color: #fff;
+  border-color: var(--amber);
+}
+.modal-btn-danger {
+  background: var(--rose);
+  color: #fff;
+  border-color: var(--rose);
+}
+.modal-btn-danger:hover {
+  opacity: 0.85;
+}
+.modal-btn-share {
+  background: var(--ink);
+  color: #fff;
+  border-color: var(--ink);
+}
+.modal-btn-share:hover {
+  opacity: 0.85;
+}
+
+/* ===== Graph search box button alignment ===== */
+.graph-search-box {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.graph-search-box .graph-refresh,
+.graph-search-box #discoverConnBtn {
+  padding: 8px 16px;
+  font-size: 13px;
+  white-space: nowrap;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* ===== Timeline action buttons: horizontal, compact ===== */
+.ledger-actions .btn-primary {
+  display: inline-flex;
+  width: auto;
+  align-items: center;
+  white-space: nowrap;
+  padding: 10px 18px;
+  font-size: 13px;
+}
+
+/* AI link SVG hover effect (2D graph) */
+svg line:hover {
+  opacity: 1 !important;
+}

@@ -178,19 +178,25 @@
     <div class="tab-panel" id="panel-calendar">
       <div class="timeline-header" style="margin-bottom:20px">
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-          <button class="btn-primary" id="timelinePrev" style="flex:0;padding:8px 16px;width:auto;background:var(--bg-card);color:var(--ink);border:1px solid var(--line)">&larr; 上月</button>
+          <button class="btn-primary" id="timelinePrev" style="flex:0 0 auto;padding:8px 16px;width:auto;background:var(--bg-card);color:var(--ink);border:1px solid var(--line)">&larr; 上月</button>
           <span id="timelineMonth" style="font-family:var(--serif);font-size:1.2rem;font-weight:600;min-width:120px;text-align:center"></span>
-          <button class="btn-primary" id="timelineNext" style="flex:0;padding:8px 16px;width:auto;background:var(--bg-card);color:var(--ink);border:1px solid var(--line)">下月 &rarr;</button>
+          <button class="btn-primary" id="timelineNext" style="flex:0 0 auto;padding:8px 16px;width:auto;background:var(--bg-card);color:var(--ink);border:1px solid var(--line)">下月 &rarr;</button>
         </div>
       </div>
       <div class="timeline-grid" id="timelineGrid"></div>
-      <div class="timeline-cards" id="timelineCards" style="margin-top:24px">      <div class="ledger-actions" style="margin-top:32px;display:flex;gap:12px;flex-wrap:wrap">
-        <button class="btn-primary" id="exportBtn" style="flex:0;padding:10px 24px;width:auto">⬇ 导出全部卡片（JSON 备份）</button>
-        <button class="btn-primary" id="importBtn" style="flex:0;padding:10px 24px;width:auto;background:var(--teal);border-color:var(--teal)">⬆ 导入备份</button>
-        <input type="file" id="importFileInput" accept=".json" style="display:none">
-        <button class="btn-primary" id="manageTagsBtn" style="flex:0;padding:10px 24px;width:auto;background:var(--ink);border-color:var(--ink)">🏷 标签管理</button>
+      <div style="margin-top:20px;padding:16px 20px;background:var(--bg-card);border:1px solid var(--line);border-radius:12px">
+        <div class="section-label" style="margin-bottom:8px">记忆回顾</div>
+        <p style="font-size:13px;color:var(--ink-faint);margin-bottom:12px">AI 将当月的碎片织成一篇有主题的回顾文章，串联场景之间的深层联系。</p>
+        <button class="btn-primary" id="genNarrativeBtn" style="width:auto;padding:10px 24px;background:var(--teal);border-color:var(--teal)">✨ 生成本月回顾</button>
+        <div id="narrativeResult" style="margin-top:16px"></div>
       </div>
-    </div>
+      <div class="timeline-cards" id="timelineCards" style="margin-top:24px"></div>
+      <div class="ledger-actions" style="margin-top:32px;display:flex;gap:12px;flex-wrap:wrap">
+        <button class="btn-primary" id="exportBtn" style="flex:0 0 auto;padding:10px 24px;width:auto">⬇ 导出全部卡片（JSON 备份）</button>
+        <button class="btn-primary" id="importBtn" style="flex:0 0 auto;padding:10px 24px;width:auto;background:var(--teal);border-color:var(--teal)">⬆ 导入备份</button>
+        <input type="file" id="importFileInput" accept=".json" style="display:none">
+        <button class="btn-primary" id="manageTagsBtn" style="flex:0 0 auto;padding:10px 24px;width:auto;background:var(--ink);border-color:var(--ink)">🏷 标签管理</button>
+      </div>
     </div>
 
     <!-- TAB: Recall -->
@@ -205,11 +211,12 @@
       <div class="graph-head">
         <div>
           <div class="section-label">记忆星图</div>
-          <div class="graph-hint">每个星团是一种场景，星点是卡片，光线是共享标签的联结。拖拽旋转、滚轮缩放、点击星点查看详情。</div>
+          <div class="graph-hint">金色线是共享标签的联结，青色线是 AI 发现的联结。拖拽旋转 · 滚轮缩放 · 点击星点看详情 · 点击青线锁定（绿色=已锁定）</div>
         </div>
         <div class="graph-search-box">
           <input class="graph-search-input" id="graphSearchInput" type="text" placeholder="搜索标题、标签、关键词…">
           <button class="btn-primary graph-refresh" id="graphRefreshBtn">重新布局</button>
+          <button class="btn-primary graph-refresh" id="discoverConnBtn" style="background:var(--amber);border-color:var(--amber)">🧠 发现联结</button><button class="btn-primary graph-refresh" id="clearConnBtn" style="background:var(--bg-card);color:var(--ink-faint);border:1px solid var(--line);display:none">清除未锁定联结</button>
         </div>
       </div>
       <div class="graph-wrap" id="graphWrap"><div class="graph-empty">生成图谱中…</div></div>
@@ -231,7 +238,7 @@
 
     <div class="about-block">
       <h3>本地优先</h3>
-      <p>你的记忆永远在你手里。所有数据存储在本机的一个 SQLite 文件里，不上传云端、不依赖外部账户，可随时一键导出备份。在场能调用云端 AI 帮你筛与提炼，但<strong>它从不替你持有记忆</strong>——这是它和云端笔记应用最大的区别。</p>
+      <p>你的记忆永远在你手里。所有数据存储在本机的一个 SQLite 文件里，不依赖云端账户，可随时一键导出备份。分析素材时，在场会调用云端 AI 帮你筛与提炼（照片会临时发送给 AI 处理），但记忆数据始终存在本地，但<strong>它从不替你持有记忆</strong>——这是它和云端笔记应用最大的区别。</p>
     </div>
 
     <div class="about-block">
