@@ -1,4 +1,4 @@
-﻿const CACHE = "presence-v10";
+﻿const CACHE = "presence-v12";
 const PRECACHE = [
   "/",
   "/static/index.html",

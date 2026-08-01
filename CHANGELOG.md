@@ -4,6 +4,162 @@
 
 ---
 
+## v0.9 -- 视频理解管线与默认场景修复（2026-08-01）
+
+**定位：** 让视频素材真正被 AI 理解（浏览器抽帧→视觉分析 + 语音转写），而非沦为占位卡片；同时修复 AI 卡片缺图、默认场景错位等遗留问题。
+
+### P0（关键缺陷）
+
+#### 1. 配了 API Key 的视频仍显示"未接入 AI"
+
+**问题：** 视频文件无法直接发给视觉 API，但又没有任何替代处理路径——结果视频被完全跳过，只生成一张 fallback 占位卡，前端却显示"未接入 AI"。
+
+**修改前：**
+```javascript
+// app.js — 视频原封不动发给后端，后端无法处理
+for (const f of selectedFiles) fd.append("files", f);
+```
+```python
+# llm.py — 视频既不进视觉通道也不进 ASR，直接被忽略
+image_paths = [m["url"] for m in materials if m["kind"] == "image" and m.get("url")]
+# video 类型的 material 不出现在任何 AI 调用路径中
+```
+
+**修改后：**
+```javascript
+// app.js — 浏览器端用 <video> + canvas 抽取 3 张关键帧，作为图片发送
+var videoFiles = selectedFiles.filter(function(f) { return f.type.startsWith("video/"); });
+if (videoFiles.length) {
+    for (var vi = 0; vi < videoFiles.length; vi++) {
+        var vframes = await extractVideoFrames(videoFiles[vi], 3);
+        sendFiles = sendFiles.concat(vframes);
+    }
+}
+```
+```python
+# llm.py — 视频音频走 ASR 转写，抽出的帧走视觉 API；有帧时视频本身不再生成占位卡
+for m in materials:
+    kind = m.get("kind", "")
+    if kind in ("audio", "video") and m.get("url"):
+        transcript = _transcribe_audio(m["url"])
+        if transcript:
+            audio_texts.append("[" + label + "] " + transcript)
+# 有抽帧图片时，从 materials 中移除视频文件，避免重复卡片
+if has_frames:
+    materials = [m for m in materials if m.get("kind") != "video"]
+```
+
+**为什么这样改：** 主流多模态 API 不接受视频文件，但可以处理图片。浏览器原生 `<video>` + `canvas.toBlob` 能在零依赖的情况下抽取关键帧，将视频"翻译"成视觉 API 可理解的格式。同时视频音轨通过 ASR 转写进入文本通道，实现"画面 + 声音"双路径理解。
+
+**收益：**
+- 视频素材首次获得真实 AI 理解能力（画面 + 语音）
+- 不再生成"未接入 AI"的误导性占位卡
+- 视频文件本身不再产生重复卡片（由帧图代表）
+
+#### 2. AI 生成的卡片丢失图片 URL
+
+**问题：** v0.8 重构 `analyze_materials` 时移除了 `image_url` 的位置映射，导致 DashScope/OpenAI 视觉 API 返回的卡片没有 `image_url`——因为 LLM JSON 不知道本地文件路径。
+
+**修改前：**
+```python
+# llm.py — 只赋 source_kind，image_url 被遗漏
+for i, c in enumerate(cards):
+    if i < len(materials) and not c.get("source_kind"):
+        c["source_kind"] = materials[i]["kind"]
+```
+
+**修改后：**
+```python
+# llm.py — 恢复 image_url 位置映射，并确保在 video_url 附加之前执行
+for i, c in enumerate(cards):
+    if i < len(materials):
+        if not c.get("image_url") and materials[i].get("kind") == "image":
+            c["image_url"] = materials[i].get("url", "")
+        if not c.get("source_kind"):
+            c["source_kind"] = materials[i]["kind"]
+# 之后再附加 video_url 到首个有图片的卡片
+```
+
+**为什么这样改：** LLM 返回的 JSON 不包含本地文件路径，必须在后端补全。位置映射虽非完美（卡片数与素材数可能不等），但覆盖了最常见的"一图一卡"场景。执行顺序也调整为先赋 `image_url`、再附加 `video_url`，否则视频 URL 无法找到宿主卡片。
+
+**收益：**
+- AI 路径的卡片重新正确显示图片
+- 视频播放按钮（`video_url`）能正确附加到卡片上
+
+### P1（健壮性提升）
+
+#### 3. fallback 模式中视频标题误写为"图像记录"
+
+**问题：** `_fallback_generate` 把 `video` 和 `image` 归入同一分支，视频卡片的标题和摘要都写成"拍摄的照片"。
+
+**修改前：**
+```python
+# llm.py — video 和 image 共用一套文案
+if kind in ("image", "video"):
+    title = "图像记录：" + Path(name).stem
+    summary = "用户在「…」场景中拍摄的照片。"
+```
+
+**修改后：**
+```python
+# llm.py — 视频独立分支
+if kind == "image":
+    title = "图像记录：" + Path(name).stem
+elif kind == "video":
+    title = "视频记录：" + Path(name).stem
+    summary = "用户在「…」场景中录制的视频片段。"
+```
+
+**为什么这样改：** 无 Key 或 API 失败时，fallback 是用户看到的最后防线。视频被标记为"照片"会造成认知混乱。
+
+**收益：** fallback 卡片文案与素材类型一致。
+
+### P2（体验优化）
+
+#### 4. 默认场景从第二个改为第一个
+
+**问题：** 页面加载时 `selectedScenario` 硬编码为 `"enterprise"`（列表第二项），而非第一项 `"museum"`。
+
+**修改前：**
+```javascript
+let selectedScenario = "enterprise";
+```
+
+**修改后：**
+```javascript
+let selectedScenario = "museum";
+```
+
+**为什么这样改：** 默认值应与列表顺序一致，避免用户每次都需要手动切换。
+
+**收益：** 首次打开即选中第一个场景，减少操作摩擦。
+
+#### 5. 跳过最后一张草稿卡后残留空文案
+
+**问题：** 连续点击"跳过"删除所有草稿卡后，"AI 提炼结果"标题和"未接入 AI"文案仍留在页面上。
+
+**修改前：**
+```javascript
+container.querySelectorAll(".dc-btn.skip").forEach(b => { b.onclick = async () => {
+    await api("/api/cards/" + b.dataset.id, { method: "DELETE" });
+    b.closest(".draft-card").remove();
+}; });
+```
+
+**修改后：**
+```javascript
+container.querySelectorAll(".dc-btn.skip").forEach(b => { b.onclick = async () => {
+    await api("/api/cards/" + b.dataset.id, { method: "DELETE" });
+    b.closest(".draft-card").remove();
+    if (!container.querySelectorAll(".draft-card").length) container.innerHTML = "";
+}; });
+```
+
+**为什么这样改：** 容器为空时应整体清空，避免残留标题和状态文案困扰用户。
+
+**收益：** 跳过全部卡片后界面干净归零。
+
+
 ## v0.8 -- AI 联结、叙事回顾与真实可用性（2026-08-01）
 
 **定位：** 从"单机记忆工具"进化为"有认知深度的个人记忆系统"。新增 AI 跨场景联结发现（增量+锁定）、月度叙事回顾、跨设备智能同步，并修复影响信任度的数据保真与诚实度问题。

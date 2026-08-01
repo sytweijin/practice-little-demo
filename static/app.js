@@ -2,7 +2,7 @@
 const API = "";
 let scenarios = [];
 let cards = [];
-let selectedScenario = "enterprise";
+let selectedScenario = "museum";
 let selectedFiles = [];
 let currentFilter = "folders";
 let recallQueue = [];
@@ -316,6 +316,55 @@ function setupUpload() {
   var _afb = document.getElementById('audioFallbackInput');
   if (_afb) { _afb.onchange = () => { if (_afb.files.length) addFiles(_afb.files); _afb.value = ''; }; }
 }
+// Extract key frames from a video file for AI visual analysis.
+// Uses browser-native <video> + canvas, no ffmpeg needed.
+async function extractVideoFrames(file, maxFrames) {
+  maxFrames = maxFrames || 3;
+  return new Promise(function(resolve) {
+    var url = URL.createObjectURL(file);
+    var video = document.createElement("video");
+    video.preload = "metadata";
+    video.muted = true;
+    video.src = url;
+    var frames = [];
+    video.addEventListener("loadedmetadata", function() {
+      var duration = video.duration;
+      if (!duration || duration < 1) { URL.revokeObjectURL(url); resolve([]); return; }
+      // Sample timestamps spread across the video
+      var times = [];
+      for (var i = 1; i <= maxFrames; i++) {
+        times.push(Math.min(duration - 0.2, (duration / (maxFrames + 1)) * i));
+      }
+      var canvas = document.createElement("canvas");
+      var ctx = canvas.getContext("2d");
+      var idx = 0;
+      function seek() {
+        if (idx >= times.length) {
+          URL.revokeObjectURL(url);
+          resolve(frames);
+          return;
+        }
+        video.currentTime = times[idx];
+      }
+      video.addEventListener("seeked", function() {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(function(blob) {
+          if (blob) {
+            var fname = file.name.replace(/\.[^.]+$/, "") + "_frame" + (idx + 1) + ".jpg";
+            frames.push(new File([blob], fname, { type: "image/jpeg" }));
+          }
+          idx++;
+          seek();
+        }, "image/jpeg", 0.85);
+      });
+      seek();
+    });
+    video.addEventListener("error", function() { URL.revokeObjectURL(url); resolve([]); });
+  });
+}
+
 function addFiles(fileList) { for (const f of fileList) selectedFiles.push(f); renderFileList(); }
 function renderFileList() {
   const list = document.getElementById("fileList");
@@ -341,12 +390,23 @@ async function doAnalyze() {
   const personalization = document.getElementById("personalizationInput").value;
   if (selectedFiles.length === 0 && !notes.trim()) { alert("请上传至少一个素材，或输入文字备注"); return; }
   btn.disabled = true; btn.textContent = "AI 正在提炼…";
+  // Extract key frames from videos for visual AI analysis
+  var sendFiles = selectedFiles.slice();
+  var videoFiles = selectedFiles.filter(function(f) { return f.type.startsWith("video/"); });
+  if (videoFiles.length) {
+    btn.textContent = "提取视频关键帧…";
+    for (var vi = 0; vi < videoFiles.length; vi++) {
+      var vframes = await extractVideoFrames(videoFiles[vi], 3);
+      sendFiles = sendFiles.concat(vframes);
+    }
+    btn.textContent = "AI 正在提炼…";
+  }
   const fd = new FormData();
   fd.append("scene_type", selectedScenario);
   fd.append("personalization", personalization);
   fd.append("notes", notes);
   fd.append("quick_mode", "false");
-  for (const f of selectedFiles) fd.append("files", f);
+  for (const f of sendFiles) fd.append("files", f);
   try {
     const data = await api("/api/analyze", { method: "POST", body: fd });
     renderDraftCards(data.cards, data.minutes_saved, data.ai_seconds, data.ai_used);
@@ -396,7 +456,11 @@ function renderDraftCards(drafts, minutes, aiSeconds, aiUsed) {
     };
   });
   container.querySelectorAll(".dc-btn.edit").forEach(b => { b.onclick = () => { const card = drafts.find(c => c.id == b.dataset.id); openEditModal(card); }; });
-  container.querySelectorAll(".dc-btn.skip").forEach(b => { b.onclick = async () => { await api("/api/cards/" + b.dataset.id, { method: "DELETE" }); b.closest(".draft-card").remove(); }; });
+  container.querySelectorAll(".dc-btn.skip").forEach(b => { b.onclick = async () => {
+    await api("/api/cards/" + b.dataset.id, { method: "DELETE" });
+    b.closest(".draft-card").remove();
+    if (!container.querySelectorAll(".draft-card").length) container.innerHTML = "";
+}; });
   container.querySelectorAll(".recall-toggle").forEach(function(t) {
     t.classList.toggle("on", false);
     t.onclick = function(e) { e.stopPropagation(); toggleRecall(t.dataset.id, !t.classList.contains("on"), t); };

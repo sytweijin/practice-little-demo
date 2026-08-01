@@ -155,10 +155,14 @@ def _fallback_generate(materials, scene_key, personalization):
         kind = m.get("kind", "text")
         ref = m.get("ref", "")
         name = m.get("name", "material" + str(i + 1))
-        if kind in ("image", "video"):
+        if kind == "image":
             title = "图像记录：" + Path(name).stem
             summary = "用户在「" + scenario["name"] + "」场景中拍摄的照片。"
             tags = [scenario["name"][:2], "图像"]
+        elif kind == "video":
+            title = "视频记录：" + Path(name).stem
+            summary = "用户在「" + scenario["name"] + "」场景中录制的视频片段。"
+            tags = [scenario["name"][:2], "视频"]
         elif kind == "audio":
             title = "语音记录：" + Path(name).stem
             summary = "用户在「" + scenario["name"] + "」场景中录制的音频片段。"
@@ -177,39 +181,76 @@ def _fallback_generate(materials, scene_key, personalization):
 
 
 def analyze_materials(materials, scene_key, personalization=""):
-    # Only images go to the vision API; videos are stored but not analyzed
+    # Only images go to the vision API; videos are transcribed via ASR
     # (sending a full video file as a fake base64 jpeg would fail on any model).
     image_paths = [m["url"] for m in materials if m["kind"] == "image" and m.get("url")]
     # Transcribe audio so its content actually reaches the LLM text channel
     audio_texts = []
     for m in materials:
-        if m.get("kind") == "audio" and m.get("url"):
+        kind = m.get("kind", "")
+        if kind in ("audio", "video") and m.get("url"):
             transcript = _transcribe_audio(m["url"])
             if transcript:
-                audio_texts.append("[语音转写] " + transcript)
+                label = "视频转写" if kind == "video" else "语音转写"
+                audio_texts.append("["" + label + ""] " + transcript)
             m["ref"] = transcript  # also surfaces in fallback cards if LLM is unavailable
     text_parts = [m["ref"] for m in materials if m["kind"] == "text" and m.get("ref")]
     text_parts = audio_texts + text_parts
     text_content = "\n".join(text_parts)
+
+    # Videos are represented by their extracted frames (visual) + ASR transcript (audio).
+    # If frames exist, don't create a separate card for the video file itself.
+    has_frames = any(m["kind"] == "image" for m in materials)
+    video_urls = [m.get("url", "") for m in materials if m.get("kind") == "video"]
+    if has_frames:
+        materials = [m for m in materials if m.get("kind") != "video"]
+
     ai_used = False
     try:
-        if _has_dashscope_key() and image_paths:
+        if image_paths and _has_dashscope_key():
             cards = _call_dashscope_vision(image_paths, text_content, scene_key, personalization)
             ai_used = True
-        elif _has_openai_key() and image_paths:
+        elif image_paths and _has_openai_key():
             cards = _call_openai_vision(image_paths, text_content, scene_key, personalization)
+            ai_used = True
+        elif text_content and (_has_dashscope_key() or _has_openai_key()):
+            cards = _call_text_llm_for_cards(text_content, scene_key, personalization)
             ai_used = True
         else:
             cards = _fallback_generate(materials, scene_key, personalization)
     except Exception as e:
         print("[LLM] call failed, falling back: " + str(e))
         cards = _fallback_generate(materials, scene_key, personalization)
+    # Assign image_url and source_kind to AI-generated cards by position
     for i, c in enumerate(cards):
-        if i < len(materials) and not c.get("image_url") and materials[i]["kind"] == "image":
-            c["image_url"] = materials[i].get("url", "")
-        if i < len(materials) and not c.get("source_kind"):
-            c["source_kind"] = materials[i]["kind"]
+        if i < len(materials):
+            if not c.get("image_url") and materials[i].get("kind") == "image":
+                c["image_url"] = materials[i].get("url", "")
+            if not c.get("source_kind"):
+                c["source_kind"] = materials[i]["kind"]
+    # Attach video URL to first image card so the card can play the original video
+    if video_urls:
+        for c in cards:
+            if c.get("image_url"):
+                c["video_url"] = video_urls[0]
+                break
     return cards, ai_used
+
+
+def _call_text_llm_for_cards(text_content, scene_key, personalization=""):
+    """Generate memory cards from text-only content (no images).
+    Used when the user uploads video/audio/notes but no images."""
+    sys_prompt = _build_prompt(scene_key, personalization)
+    prompt = (
+        sys_prompt + "\n\n"
+        "Below is the text content extracted from the user's materials (notes and/or audio/video transcripts):\n"
+        + text_content + "\n\n"
+        "Generate memory cards from this content."
+    )
+    text = _call_text_llm(prompt)
+    if not text:
+        return []
+    return _parse_json(text)
 
 
 def _call_text_llm(prompt):
