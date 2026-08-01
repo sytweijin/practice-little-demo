@@ -105,7 +105,7 @@ def _call_dashscope_vision(image_paths, text_content, scene_key, personalization
     }
     r = httpx.post(
         "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
-        json=body, headers={"Authorization": "Bearer " + api_key}, timeout=60,
+        json=body, headers={"Authorization": "Bearer " + api_key}, timeout=180,
     )
     r.raise_for_status()
     data = r.json()
@@ -131,7 +131,7 @@ def _call_openai_vision(image_paths, text_content, scene_key, personalization):
         "response_format": {"type": "json_object"},
     }
     r = httpx.post(base_url + "/chat/completions", json=body,
-                   headers={"Authorization": "Bearer " + api_key}, timeout=60)
+                   headers={"Authorization": "Bearer " + api_key}, timeout=180)
     r.raise_for_status()
     text = r.json()["choices"][0]["message"]["content"]
     return _parse_json(text)
@@ -208,6 +208,7 @@ def analyze_materials(materials, scene_key, personalization=""):
     card_materials = [m for m in materials if m["kind"] != "frame"]
 
     ai_used = False
+    ai_error = None  # real error when a key WAS present but the call failed
     try:
         if vision_paths and _has_dashscope_key():
             cards = _call_dashscope_vision(vision_paths, text_content, scene_key, personalization)
@@ -221,7 +222,11 @@ def analyze_materials(materials, scene_key, personalization=""):
         else:
             cards = _fallback_generate(card_materials, scene_key, personalization)
     except Exception as e:
-        print("[LLM] call failed, falling back: " + str(e))
+        # Only attribute the failure to "no key" when a key is genuinely absent.
+        # If a key WAS present, this is a real call error (bad model / network /
+        # quota) and must be surfaced instead of being disguised as "未接入 AI".
+        if _has_dashscope_key() or _has_openai_key():
+            ai_error = str(e)[:300]
         cards = _fallback_generate(card_materials, scene_key, personalization)
 
     # Assign media URLs to AI-generated cards by position.
@@ -241,7 +246,7 @@ def analyze_materials(materials, scene_key, personalization=""):
             c["image_url"] = video_materials[0].get("url", "")
             if not c.get("source_kind"):
                 c["source_kind"] = "video"
-    return cards, ai_used
+    return cards, ai_used, ai_error
 
 
 def _call_text_llm_for_cards(text_content, scene_key, personalization=""):

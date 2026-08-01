@@ -4,6 +4,144 @@
 
 ---
 
+## v1.0 -- 修复 AI 拆解失败：视觉调用超时 + 真实错误暴露（2026-08-02）
+
+**定位：** 上传照片/视频后一律报"AI 拆解失败"。根因是视觉调用超时（60s 对推理模型不够）+ 调用失败被静默吞掉后前端误报"未接入 AI"，导致无法定位真实原因。本次彻底修复并让失败原因如实暴露。
+
+### P0（关键缺陷）
+
+#### 1. 视觉调用超时 60s，推理模型必然超时 → AI 拆解失败
+
+**问题：** 视觉理解走的是 `qwen3.7-plus`，一个带"思考"的推理模型，单张照片实际耗时约 40s。但 `_call_dashscope_vision` / `_call_openai_vision` 的 httpx 超时写死 `timeout=60`。单张照片压在超时边缘（图稍大或网络抖动即超），视频路径需送多帧 + 先做 ASR，几乎必然超过 60s 触发 `ReadTimeout`，前端显示"AI 拆解失败：The read operation timed out"。
+
+**修改前：**
+```python
+# llm.py — 两个视觉调用均写死 60s
+r = httpx.post(
+    "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+    json=body, headers={"Authorization": "Bearer " + api_key}, timeout=60,
+)
+# _call_openai_vision 同样
+r = httpx.post(base_url + "/chat/completions", json=body,
+               headers={"Authorization": "Bearer " + api_key}, timeout=60)
+```
+
+**修改后：**
+```python
+# llm.py — 提升到 180s，覆盖推理模型 + 多帧 + ASR 的总耗时
+r = httpx.post(
+    "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+    json=body, headers={"Authorization": "Bearer " + api_key}, timeout=180,
+)
+r = httpx.post(base_url + "/chat/completions", json=body,
+               headers={"Authorization": "Bearer " + api_key}, timeout=180)
+```
+
+**为什么这样改：** 用真实上传的素材逐层验证过：单图约 40s、3 图约 52s、视频（含 ASR）约 47s 成功——全部在 60s 之外、180s 之内。60s 对推理模型是结构性不足，不是偶发抖动。保持 180s 而非更长，避免无响应时让用户空等过久。
+
+**收益：**
+- 照片/视频上传后 AI 拆解恢复正常，不再因超时报错
+- 实测同一视频从"超时失败"变为"47s 成功生成 2 张卡片"
+
+#### 2. API 调用失败被静默吞掉，前端误报"未接入 AI"
+
+**问题：** `analyze_materials` 捕获异常后只 `print` 日志、返回 `ai_used=False`，前端一律显示"未接入 AI，配置 API Key 后可启用"。于是即便用户已正确配置 Key，任何真实调用错误（超时、模型名、配额）都被伪装成"未配置"，无从排查。这正是本次问题长期无法定位的直接原因。
+
+**修改前：**
+```python
+# llm.py — 失败原因丢失，统一回退
+except Exception as e:
+    print("[LLM] call failed, falling back: " + str(e))
+    cards = _fallback_generate(card_materials, scene_key, personalization)
+...
+return cards, ai_used   # 无错误信息字段
+```
+```javascript
+// app.js — 不区分"无 Key"与"Key 存在但调用失败"
+function renderDraftCards(drafts, minutes, aiSeconds, aiUsed) {
+  let aiLabel = (aiUsed === false) ? "⚠️ 未接入 AI，配置 API Key 后可启用..." : "...";
+}
+```
+
+**修改后：**
+```python
+# llm.py — 仅当 Key 真正缺失才视为"未接入"，否则保留真实错误
+except Exception as e:
+    if _has_dashscope_key() or _has_openai_key():
+        ai_error = str(e)[:300]
+    cards = _fallback_generate(card_materials, scene_key, personalization)
+...
+return cards, ai_used, ai_error
+```
+```javascript
+// app.js — 三态：成功 / 有 Key 但调用失败 / 无 Key
+function renderDraftCards(drafts, minutes, aiSeconds, aiUsed, aiError) {
+  if (aiUsed === false && aiError) {
+    aiLabel = "⚠️ AI 调用失败：" + aiError + " · 请检查 API Key/模型名/网络";
+  } else if (aiUsed === false) {
+    aiLabel = "⚠️ 未接入 AI，配置 API Key 后可启用";
+  } else { ... }
+}
+```
+
+**为什么这样改：** "未接入 AI"和"调用失败"是两类完全不同的问题，前者需用户配置 Key，后者需排查模型/网络/配额。混为一谈会让用户在 Key 已正确配置时仍误以为是配置问题。`ai_error` 链路（llm.py → main.py → app.js）让真实原因直达界面。
+
+**收益：**
+- 失败原因直接显示在卡片区，无需查服务器日志即可定位
+- 不再把真实调用错误误导成"未配置"
+
+### P1（健壮性提升）
+
+#### 3. load_dotenv 不 override，进程残留空 Key 覆盖 .env
+
+**问题：** `load_dotenv()` 默认不覆盖进程已有环境变量。若启动 shell 中残留空的 `DASHSCOPE_API_KEY`（或从污染的环境继承），.env 中的正确值无法生效，服务器进程实际拿到空 Key，于是 `_has_dashscope_key()` 返回 False，直接走占位卡片——表现为"明明配了 Key 却不调用 AI"。
+
+**修改前：**
+```python
+# main.py — 默认不覆盖已有（可能为空的）环境变量
+load_dotenv()
+```
+
+**修改后：**
+```python
+# main.py — .env 始终覆盖进程中可能残留的空值
+load_dotenv(override=True)
+```
+
+**为什么这样改：** .env 是配置的唯一事实来源。若用户已在 .env 写入正确 Key，理应始终生效，不应被一个意外存在的空环境变量否决。
+
+**收益：**
+- 修正 .env 后重启即可生效，不再受进程残留环境干扰
+
+#### 4. 视频抽帧用全分辨率，放大超时与带宽风险
+
+**问题：** 浏览器抽帧时 `canvas` 直接设为 `video.videoWidth × video.videoHeight`，手机视频常为 1080p/4K。全分辨率帧体积大、视觉 API 处理慢，是视频路径频繁超时的放大因素。
+
+**修改前：**
+```javascript
+// app.js — 帧为原始分辨率
+canvas.width = video.videoWidth;
+canvas.height = video.videoHeight;
+ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+```
+
+**修改后：**
+```javascript
+// app.js — 缩放到最大 720px 宽，保持宽高比
+var maxW = 720;
+var scale = Math.min(1, maxW / video.videoWidth);
+canvas.width = Math.round(video.videoWidth * scale);
+canvas.height = Math.round(video.videoHeight * scale);
+ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+```
+
+**为什么这样改：** 视觉模型对缩略图的理解力足够（卡片只需标题/摘要/标签，无需像素级细节）。720px 在清晰度与处理速度间取得平衡，显著降低单帧体积和 API 耗时，配合 P0 的超时提升双保险。
+
+**收益：**
+- 视频帧体积大幅下降，视觉 API 响应更快、更稳定
+- 减少上传带宽（移动端尤其明显）
+
+---
 ## v0.9 -- 视频理解管线重构（2026-08-01）
 
 **定位：** 让视频素材真正被 AI 理解并作为视频保存，而非拆成一堆照片卡片。核心改动：浏览器抽帧只作为 AI 视觉输入（不产生独立卡片），视频本体是主要素材并生成带播放器的视频卡片。

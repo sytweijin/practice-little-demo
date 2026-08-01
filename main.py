@@ -39,7 +39,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    # override=True so .env always wins over any pre-existing (possibly empty)
+    # DASHSCOPE_API_KEY / OPENAI_API_KEY in the launched process environment.
+    load_dotenv(override=True)
 except ImportError:
     pass
 
@@ -206,9 +208,11 @@ async def api_analyze(
         raise HTTPException(400, "No materials provided")
 
     t0 = time.monotonic()
-    cards_data, ai_used = llm.analyze_materials(materials, scene_type, personalization)
+    cards_data, ai_used, ai_error = llm.analyze_materials(materials, scene_type, personalization)
     ai_seconds = max(0.0, time.monotonic() - t0)
     scenario = get_scenario(scene_type)
+    if ai_error:
+        print("[analyze] AI call failed but key present:", ai_error)
 
     # Save as draft cards
     batch_id = str(int(datetime.now().timestamp()))
@@ -226,7 +230,7 @@ async def api_analyze(
     minutes = real_count * scenario["minutes_per_material"]
     memory.record_ledger(scene_type, real_count, minutes, len(saved), ai_seconds=ai_seconds, quick_mode=quick_mode)
 
-    return {"cards": saved, "materials_count": real_count, "minutes_saved": minutes, "ai_seconds": round(ai_seconds, 1), "ai_used": ai_used, "quick_mode": quick_mode}
+    return {"cards": saved, "materials_count": real_count, "minutes_saved": minutes, "ai_seconds": round(ai_seconds, 1), "ai_used": ai_used, "ai_error": ai_error, "quick_mode": quick_mode}
 
 
 class ConfirmInput(BaseModel):
@@ -556,6 +560,9 @@ def _ensure_cert(ip=None):
         )
     )
     return str(CERT_FILE), str(KEY_FILE)
+
+
+
 
 
 if __name__ == "__main__":

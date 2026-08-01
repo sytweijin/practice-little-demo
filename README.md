@@ -244,6 +244,10 @@ OPENAI_VISION_MODEL=gpt-4o          # 可选
 OPENAI_TEXT_MODEL=gpt-4o-mini       # 可选
 ```
 
+> **改完 .env 后必须重启服务器**（Ctrl+C 后重新 `python main.py`）。uvicorn 的热重载只重载代码，不会重新加载环境变量——仅修改 .env 而不重启，新的 Key 不会生效。
+>
+> 视觉理解使用推理模型，单次处理约 30-60 秒，请耐心等待。
+
 ## 项目结构
 
 ```

@@ -347,8 +347,13 @@ async function extractVideoFrames(file, maxFrames) {
         video.currentTime = times[idx];
       }
       video.addEventListener("seeked", function() {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
+        // Downscale to max 720px wide so qwen3.7-plus (a slow reasoning
+        // model) can finish inside the timeout. Full-res 1080p/4K frames
+        // were the main cause of vision timeouts on video uploads.
+        var maxW = 720;
+        var scale = Math.min(1, maxW / video.videoWidth);
+        canvas.width = Math.round(video.videoWidth * scale);
+        canvas.height = Math.round(video.videoHeight * scale);
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         canvas.toBlob(function(blob) {
           if (blob) {
@@ -411,7 +416,7 @@ async function doAnalyze() {
   for (const f of allFrames) fd.append("video_frames", f);
   try {
     const data = await api("/api/analyze", { method: "POST", body: fd });
-    renderDraftCards(data.cards, data.minutes_saved, data.ai_seconds, data.ai_used);
+    renderDraftCards(data.cards, data.minutes_saved, data.ai_seconds, data.ai_used, data.ai_error);
     selectedFiles = []; renderFileList();
     document.getElementById("notesInput").value = "";
     document.getElementById("personalizationInput").value = "";
@@ -429,10 +434,19 @@ async function doAnalyze() {
     btn.disabled = false; btn.textContent = "生成记忆卡片 →";
   }
 }
-function renderDraftCards(drafts, minutes, aiSeconds, aiUsed) {
+function renderDraftCards(drafts, minutes, aiSeconds, aiUsed, aiError) {
   const container = document.getElementById("draftCards");
   if (!drafts.length) { container.innerHTML = '<div class="draft-empty">AI 认为本次素材中没有值得长期保存的内容</div>'; return; }
-  let aiLabel = (aiUsed === false) ? "⚠️ 未接入 AI，以下为原始素材占位卡片（配置 API Key 后可启用真实筛选）" : ("✨ AI 筛选出 " + drafts.length + " 条值得留存的内容 · 预估节省 " + minutes + " 分钟整理时间" + (aiSeconds ? " · AI 实际处理 " + Math.max(1, Math.round(aiSeconds)) + " 秒" : ""));
+  let aiLabel;
+  if (aiUsed === false && aiError) {
+    // Key was present but the real call failed — say so explicitly instead of
+    // disguising it as "未接入 AI / 配置 API Key".
+    aiLabel = "⚠️ AI 调用失败：" + aiError + " · 已降级为占位卡片（请检查 API Key 是否有效、模型名、网络连通性）";
+  } else if (aiUsed === false) {
+    aiLabel = "⚠️ 未接入 AI，以下为原始素材占位卡片（配置 API Key 后可启用真实筛选）";
+  } else {
+    aiLabel = "✨ AI 筛选出 " + drafts.length + " 条值得留存的内容 · 预估节省 " + minutes + " 分钟整理时间" + (aiSeconds ? " · AI 实际处理 " + Math.max(1, Math.round(aiSeconds)) + " 秒" : "");
+  }
   let html = '<div style="font-size:13px;color:var(--ink-faint);margin-bottom:6px">' + aiLabel + "</div>";
   html += '<div style="font-size:12px;color:var(--ink-faint);margin-bottom:12px;border-left:2px solid var(--line);padding-left:10px"><strong style="color:var(--ink-soft)">AI 的筛选依据：</strong>信息密度 · 独特性 · 长期价值。<span style="color:var(--ink-faint)">个人归因（为什么对你重要）由你补充——AI 不替你判断。</span></div>';
   html += drafts.map(c =>
