@@ -392,12 +392,13 @@ async function doAnalyze() {
   btn.disabled = true; btn.textContent = "AI 正在提炼…";
   // Extract key frames from videos for visual AI analysis
   var sendFiles = selectedFiles.slice();
+  var allFrames = [];
   var videoFiles = selectedFiles.filter(function(f) { return f.type.startsWith("video/"); });
   if (videoFiles.length) {
     btn.textContent = "提取视频关键帧…";
     for (var vi = 0; vi < videoFiles.length; vi++) {
       var vframes = await extractVideoFrames(videoFiles[vi], 3);
-      sendFiles = sendFiles.concat(vframes);
+      allFrames = allFrames.concat(vframes);
     }
     btn.textContent = "AI 正在提炼…";
   }
@@ -407,6 +408,7 @@ async function doAnalyze() {
   fd.append("notes", notes);
   fd.append("quick_mode", "false");
   for (const f of sendFiles) fd.append("files", f);
+  for (const f of allFrames) fd.append("video_frames", f);
   try {
     const data = await api("/api/analyze", { method: "POST", body: fd });
     renderDraftCards(data.cards, data.minutes_saved, data.ai_seconds, data.ai_used);

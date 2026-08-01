@@ -171,6 +171,7 @@ async def api_analyze(
     notes: str = Form(""),
     quick_mode: bool = Form(False),
     files: list[UploadFile] = File(default=[]),
+    video_frames: list[UploadFile] = File(default=[]),
 ):
     materials = []
     for f in files:
@@ -190,6 +191,13 @@ async def api_analyze(
             materials.append({"kind": "image", "url": url, "name": f.filename, "ref": ""})
         else:
             materials.append({"kind": "text", "url": url, "name": f.filename, "ref": content.decode("utf-8", errors="ignore")[:500]})
+
+    # Video frames extracted by the browser for AI visual analysis.
+    # These are internal: they feed the vision API but never become standalone cards.
+    for f in video_frames:
+        content = await f.read()
+        url = llm.save_upload(f.filename, content)
+        materials.append({"kind": "frame", "url": url, "name": f.filename, "ref": ""})
 
     if notes.strip():
         materials.append({"kind": "text", "url": "", "name": "notes", "ref": notes.strip()})
@@ -213,11 +221,12 @@ async def api_analyze(
         cd["batch_id"] = batch_id
         saved.append(memory.create_card(cd))
 
-    # Record ledger
-    minutes = len(materials) * scenario["minutes_per_material"]
-    memory.record_ledger(scene_type, len(materials), minutes, len(saved), ai_seconds=ai_seconds, quick_mode=quick_mode)
+    # Record ledger (frames are internal, not counted as user materials)
+    real_count = len([m for m in materials if m["kind"] != "frame"])
+    minutes = real_count * scenario["minutes_per_material"]
+    memory.record_ledger(scene_type, real_count, minutes, len(saved), ai_seconds=ai_seconds, quick_mode=quick_mode)
 
-    return {"cards": saved, "materials_count": len(materials), "minutes_saved": minutes, "ai_seconds": round(ai_seconds, 1), "ai_used": ai_used, "quick_mode": quick_mode}
+    return {"cards": saved, "materials_count": real_count, "minutes_saved": minutes, "ai_seconds": round(ai_seconds, 1), "ai_used": ai_used, "quick_mode": quick_mode}
 
 
 class ConfirmInput(BaseModel):
