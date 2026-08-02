@@ -438,7 +438,9 @@ function renderDraftCards(drafts, minutes, aiSeconds, aiUsed, aiError) {
   const container = document.getElementById("draftCards");
   if (!drafts.length) { container.innerHTML = '<div class="draft-empty">AI 认为本次素材中没有值得长期保存的内容</div>'; return; }
   let aiLabel;
-  if (aiUsed === false && aiError) {
+  if (aiUsed === false && aiError === "NOT_AN_ERROR") {
+    aiLabel = "🎵 AI 已接入，但未识别到可分析的语音内容（音乐/环境音等）。已保存为占位卡片，请补充描述。";
+  } else if (aiUsed === false && aiError) {
     // Key was present but the real call failed — say so explicitly instead of
     // disguising it as "未接入 AI / 配置 API Key".
     aiLabel = "⚠️ AI 调用失败：" + aiError + " · 已降级为占位卡片（请检查 API Key 是否有效、模型名、网络连通性）";

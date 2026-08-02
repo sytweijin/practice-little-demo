@@ -219,9 +219,9 @@ def _fallback_generate(materials, scene_key, personalization):
             summary = "用户在「" + scenario["name"] + "」场景中录制的视频片段。"
             tags = [scenario["name"][:2], "视频"]
         elif kind == "audio":
-            title = "语音记录：" + Path(name).stem
-            summary = "用户在「" + scenario["name"] + "」场景中录制的音频片段。"
-            tags = [scenario["name"][:2], "录音"]
+            title = "音频记录：" + Path(name).stem
+            summary = "用户在「" + scenario["name"] + "」场景中录制的音频。ASR 未识别到语音内容（可能是音乐、环境音等非言语音频），请补充描述这段音频的内容与意义。"
+            tags = [scenario["name"][:2], "音频"]
         else:
             title = ref[:40] if len(ref) > 40 else (ref or "备注 " + str(i + 1))
             summary = ref
@@ -247,16 +247,13 @@ def analyze_materials(materials, scene_key, personalization=""):
 
     # Transcribe audio/video so their content reaches the LLM text channel
     audio_texts = []
-    asr_error = None  # detail when ASR fails (e.g. no speech detected)
     for m in materials:
         kind = m.get("kind", "")
         if kind in ("audio", "video") and m.get("url"):
             try:
                 transcript = _transcribe_audio(m["url"])
-            except RuntimeError as re:
+            except RuntimeError:
                 transcript = ""
-                if asr_error is None:
-                    asr_error = str(re)
             if transcript:
                 label = "\u89c6\u9891\u8f6c\u5199" if kind == "video" else "\u8bed\u97f3\u8f6c\u5199"
                 audio_texts.append("[" + label + "] " + transcript)
@@ -281,18 +278,13 @@ def analyze_materials(materials, scene_key, personalization=""):
             cards = _call_text_llm_for_cards(text_content, scene_key, personalization)
             ai_used = True
         else:
-            # Key is configured but there is nothing to analyze (e.g. audio whose
-            # ASR failed). Surface this instead of disguising it as "未接入 AI".
-            if _has_dashscope_key() or _has_openai_key():
-                has_av = any(m.get("kind") in ("audio", "video") for m in card_materials)
-                if has_av and not text_content and not vision_paths:
-                    if asr_error and "no_valid_fragment" in asr_error:
-                        ai_error = "录音未检测到语音内容（可能太短或没有说话），AI 无内容可分析"
-                    elif asr_error:
-                        ai_error = "录音/视频转写失败：" + asr_error[:150]
-                    else:
-                        ai_error = "录音/视频转写失败，AI 无内容可分析（请检查音频是否包含语音）"
+            # Key is configured but there is nothing for AI to analyze (e.g.
+            # non-speech audio: music, ambient sound, or no clear voice).
+            # Don't report an error — just generate placeholder cards so the
+            # user can add their own description later.
             cards = _fallback_generate(card_materials, scene_key, personalization)
+            if (_has_dashscope_key() or _has_openai_key()) and not text_content and not vision_paths:
+                ai_error = "NOT_AN_ERROR"  # sentinel: placeholder cards for non-text content
     except Exception as e:
         # Only attribute the failure to "no key" when a key is genuinely absent.
         # If a key WAS present, this is a real call error (bad model / network /
