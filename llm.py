@@ -6,6 +6,7 @@ import urllib.parse
 import time
 import base64
 import json
+import uuid
 import httpx
 from pathlib import Path
 from scenarios import get_scenario
@@ -28,9 +29,9 @@ def save_upload(filename, content_bytes):
     # Keep only safe filename characters
     safe = re.sub(r"[^a-zA-Z0-9._\-一-鿿]", "", Path(raw).name).replace(" ", "_")
     if not safe:
-        safe = "upload_" + str(int(time.time()))
+        safe = "upload_" + time.strftime("%Y%m%d%H%M%S") + "_" + uuid.uuid4().hex[:8]
     # Add timestamp to prevent collisions
-    ts = str(int(time.time()))
+    ts = time.strftime("%Y%m%d%H%M%S") + "_" + uuid.uuid4().hex[:8]
     name_parts = Path(safe).stem[:40]
     ext = Path(safe).suffix
     safe = name_parts + "_" + ts + ext
@@ -133,8 +134,9 @@ def _build_prompt(scene_key, personalization):
         parts.append("User note: " + personalization + " - prioritize content matching the user's stated direction.")
     parts.append("Scene focus: " + scenario["focus_prompt"])
     parts.append("For each card generate: title (one-line objective summary), summary (2-3 sentence description), tags (2-3). Do NOT generate a personal-attribution field; that is reserved for the user.")
+    parts.append("If the image contains readable text (slides, signs, labels, documents), include an ocr_text field with the key visible text so it becomes searchable later.")
     parts.append("Return only cards worth keeping, count is flexible.")
-    parts.append('Return strictly as JSON: {"cards": [{"title":"...","summary":"...","tags":["..."]}]}')
+    parts.append('Return strictly as JSON: {"cards": [{"title":"...","summary":"...","tags":["..."],"ocr_text":"..."}]}')
     return "\n".join(parts)
 
 
@@ -142,16 +144,17 @@ def _call_dashscope_vision(image_paths, text_content, scene_key, personalization
     api_key = os.getenv("DASHSCOPE_API_KEY")
     sys_prompt = _build_prompt(scene_key, personalization)
     content = []
-    for img_path in image_paths:
-        full = Path(__file__).parent / img_path.lstrip("/")
+    for img in image_paths:
+        full = Path(__file__).parent / img["url"].lstrip("/")
         if full.exists():
             b64 = base64.b64encode(full.read_bytes()).decode()
-            content.append({"image": "data:image/jpeg;base64," + b64})
+            mime = img.get("mime", "image/jpeg")
+            content.append({"image": "data:" + mime + ";base64," + b64})
     if text_content:
         content.append({"text": "Text notes:\n" + text_content})
     content.append({"text": "Analyze the above materials and generate memory cards per the system prompt."})
     body = {
-        "model": "qwen3.7-plus",
+        "model": os.getenv("DASHSCOPE_VISION_MODEL", "qwen3.7-plus"),
         "input": {"messages": [
             {"role": "system", "content": [{"text": sys_prompt}]},
             {"role": "user", "content": content},
@@ -170,14 +173,15 @@ def _call_dashscope_vision(image_paths, text_content, scene_key, personalization
 
 def _call_openai_vision(image_paths, text_content, scene_key, personalization):
     api_key = os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("OPENAI_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
     sys_prompt = _build_prompt(scene_key, personalization)
     content = [{"type": "text", "text": sys_prompt}]
-    for img_path in image_paths:
-        full = Path(__file__).parent / img_path.lstrip("/")
+    for img in image_paths:
+        full = Path(__file__).parent / img["url"].lstrip("/")
         if full.exists():
             b64 = base64.b64encode(full.read_bytes()).decode()
-            content.append({"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + b64}})
+            mime = img.get("mime", "image/jpeg")
+            content.append({"type": "image_url", "image_url": {"url": "data:" + mime + ";base64," + b64}})
     if text_content:
         content.append({"type": "text", "text": "Text notes:\n" + text_content})
     body = {
@@ -203,7 +207,7 @@ def _parse_json(text):
     return json.loads(text).get("cards", [])
 
 
-def _fallback_generate(materials, scene_key, personalization):
+def _fallback_generate(materials, scene_key, personalization, privacy_mode=False):
     scenario = get_scenario(scene_key)
     cards = []
     for i, m in enumerate(materials):
@@ -212,15 +216,21 @@ def _fallback_generate(materials, scene_key, personalization):
         name = m.get("name", "material" + str(i + 1))
         if kind == "image":
             title = "图像记录：" + Path(name).stem
-            summary = "用户在「" + scenario["name"] + "」场景中拍摄的照片。"
+            summary = ("用户在「" + scenario["name"] + "」场景中拍摄的照片。"
+                       + ("隐私模式下未调用云端 AI，请补充照片内容与意义。" if privacy_mode else ""))
             tags = [scenario["name"][:2], "图像"]
         elif kind == "video":
             title = "视频记录：" + Path(name).stem
-            summary = "用户在「" + scenario["name"] + "」场景中录制的视频片段。"
+            summary = ("用户在「" + scenario["name"] + "」场景中录制的视频片段。"
+                       + ("隐私模式下未调用云端 AI/ASR，请补充视频内容与意义。" if privacy_mode else ""))
             tags = [scenario["name"][:2], "视频"]
         elif kind == "audio":
             title = "音频记录：" + Path(name).stem
-            summary = "用户在「" + scenario["name"] + "」场景中录制的音频。ASR 未识别到语音内容（可能是音乐、环境音等非言语音频），请补充描述这段音频的内容与意义。"
+            summary = "用户在「" + scenario["name"] + "」场景中录制的音频。"
+            if privacy_mode:
+                summary += "隐私模式下未调用云端语音识别，请补充音频内容与意义。"
+            else:
+                summary += "ASR 未识别到语音内容（可能是音乐、环境音等非言语音频），请补充描述这段音频的内容与意义。"
             tags = [scenario["name"][:2], "音频"]
         else:
             title = ref[:40] if len(ref) > 40 else (ref or "备注 " + str(i + 1))
@@ -235,75 +245,85 @@ def _fallback_generate(materials, scene_key, personalization):
     return cards
 
 
-def analyze_materials(materials, scene_key, personalization=""):
-    # Frames (kind="frame") are browser-extracted video keyframes: they feed
-    # the vision API so the AI can "see" the video, but they never become
-    # standalone cards. The video file itself is the primary material.
-    frame_paths = [m["url"] for m in materials if m["kind"] == "frame" and m.get("url")]
-    image_paths = [m["url"] for m in materials if m["kind"] == "image" and m.get("url")]
-    vision_paths = image_paths + frame_paths
-
-    video_materials = [m for m in materials if m["kind"] == "video"]
-
-    # Transcribe audio/video so their content reaches the LLM text channel
-    audio_texts = []
-    for m in materials:
-        kind = m.get("kind", "")
-        if kind in ("audio", "video") and m.get("url"):
-            try:
-                transcript = _transcribe_audio(m["url"])
-            except RuntimeError:
-                transcript = ""
-            if transcript:
-                label = "\u89c6\u9891\u8f6c\u5199" if kind == "video" else "\u8bed\u97f3\u8f6c\u5199"
-                audio_texts.append("[" + label + "] " + transcript)
-            m["ref"] = transcript
-    text_parts = [m["ref"] for m in materials if m["kind"] == "text" and m.get("ref")]
-    text_parts = audio_texts + text_parts
-    text_content = "\n".join(text_parts)
-
+def analyze_materials(materials, scene_key, personalization="", privacy_mode=False):
     # Materials for card creation exclude frames entirely
     card_materials = [m for m in materials if m["kind"] != "frame"]
+    video_materials = [m for m in materials if m["kind"] == "video"]
 
     ai_used = False
     ai_error = None  # real error when a key WAS present but the call failed
-    try:
-        if vision_paths and _has_dashscope_key():
-            cards = _call_dashscope_vision(vision_paths, text_content, scene_key, personalization)
-            ai_used = True
-        elif vision_paths and _has_openai_key():
-            cards = _call_openai_vision(vision_paths, text_content, scene_key, personalization)
-            ai_used = True
-        elif text_content and (_has_dashscope_key() or _has_openai_key()):
-            cards = _call_text_llm_for_cards(text_content, scene_key, personalization)
-            ai_used = True
-        else:
-            # Key is configured but there is nothing for AI to analyze (e.g.
-            # non-speech audio: music, ambient sound, or no clear voice).
-            # Don't report an error — just generate placeholder cards so the
-            # user can add their own description later.
+    if privacy_mode:
+        # Local-only mode: no cloud ASR/LLM/vision calls. Each material gets
+        # one placeholder card and the user fills in its real meaning later.
+        cards = _fallback_generate(card_materials, scene_key, personalization, privacy_mode=True)
+    else:
+        # Frames (kind="frame") are browser-extracted video keyframes: they feed
+        # the vision API so the AI can "see" the video, but they never become
+        # standalone cards. The video file itself is the primary material.
+        frame_meta = [{"url": m["url"], "mime": m.get("mime", "image/jpeg")}
+                      for m in materials if m["kind"] == "frame" and m.get("url")]
+        image_meta = [{"url": m["url"], "mime": m.get("mime", "image/jpeg")}
+                      for m in materials if m["kind"] == "image" and m.get("url")]
+        vision_paths = image_meta + frame_meta
+
+        # Transcribe audio/video so their content reaches the LLM text channel
+        audio_texts = []
+        for m in materials:
+            kind = m.get("kind", "")
+            if kind in ("audio", "video") and m.get("url"):
+                try:
+                    transcript = _transcribe_audio(m["url"])
+                except RuntimeError:
+                    transcript = ""
+                if transcript:
+                    label = "\u89c6\u9891\u8f6c\u5199" if kind == "video" else "\u8bed\u97f3\u8f6c\u5199"
+                    audio_texts.append("[" + label + "] " + transcript)
+                m["ref"] = transcript
+        text_parts = [m["ref"] for m in materials if m["kind"] == "text" and m.get("ref")]
+        text_parts = audio_texts + text_parts
+        text_content = "\n".join(text_parts)
+
+        try:
+            if vision_paths and _has_dashscope_key():
+                cards = _call_dashscope_vision(vision_paths, text_content, scene_key, personalization)
+                ai_used = True
+            elif vision_paths and _has_openai_key():
+                cards = _call_openai_vision(vision_paths, text_content, scene_key, personalization)
+                ai_used = True
+            elif text_content and (_has_dashscope_key() or _has_openai_key()):
+                cards = _call_text_llm_for_cards(text_content, scene_key, personalization)
+                ai_used = True
+            else:
+                # Key is configured but there is nothing for AI to analyze (e.g.
+                # non-speech audio: music, ambient sound, or no clear voice).
+                # Don't report an error - just generate placeholder cards so the
+                # user can add their own description later.
+                cards = _fallback_generate(card_materials, scene_key, personalization)
+                if (_has_dashscope_key() or _has_openai_key()) and not text_content and not vision_paths:
+                    ai_error = "NOT_AN_ERROR"  # sentinel: placeholder cards for non-text content
+        except Exception as e:
+            # Only attribute the failure to "no key" when a key is genuinely absent.
+            # If a key WAS present, this is a real call error (bad model / network /
+            # quota) and must be surfaced instead of being disguised as "no AI".
+            if _has_dashscope_key() or _has_openai_key():
+                ai_error = str(e)[:300]
             cards = _fallback_generate(card_materials, scene_key, personalization)
-            if (_has_dashscope_key() or _has_openai_key()) and not text_content and not vision_paths:
-                ai_error = "NOT_AN_ERROR"  # sentinel: placeholder cards for non-text content
-    except Exception as e:
-        # Only attribute the failure to "no key" when a key is genuinely absent.
-        # If a key WAS present, this is a real call error (bad model / network /
-        # quota) and must be surfaced instead of being disguised as "未接入 AI".
-        if _has_dashscope_key() or _has_openai_key():
-            ai_error = str(e)[:300]
-        cards = _fallback_generate(card_materials, scene_key, personalization)
 
     # Assign media URLs to AI-generated cards by position.
     # For video materials, image_url points to the video file itself so the
     # frontend renders a <video> player.  Frames are never assigned to cards.
     for i, c in enumerate(cards):
+        # Merge any OCR text extracted by the vision model into source_ref
+        # so it becomes part of the full-text search index.
+        ocr = c.pop("ocr_text", "")
+        if ocr:
+            existing_ref = c.get("source_ref", "")
+            c["source_ref"] = (existing_ref + "\n" + ocr).strip() if existing_ref else ocr
         if i < len(card_materials):
             m = card_materials[i]
             if not c.get("source_kind"):
                 c["source_kind"] = m["kind"]
-            if m["kind"] == "image" and not c.get("image_url"):
-                c["image_url"] = m.get("url", "")
-            elif m["kind"] == "video" and not c.get("image_url"):
+            if m["kind"] in ("image", "video", "audio") and not c.get("image_url"):
                 c["image_url"] = m.get("url", "")
         elif video_materials and not c.get("image_url"):
             # Extra AI cards beyond material count: associate with first video

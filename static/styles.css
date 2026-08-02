@@ -208,6 +208,12 @@ section { padding: 100px 0; }
 .scenario-chip.selected {
   background: var(--amber); border-color: var(--amber); color: #fff;
 }
+.scenario-chip.scenario-add { border-style: dashed; }
+.scenario-edit {
+  margin-left: 6px; padding: 0 4px; border: none; background: transparent;
+  color: inherit; font-size: 12px; cursor: pointer; line-height: 1; opacity: .8;
+}
+.scenario-edit:hover { opacity: 1; }
 
 .upload-zone {
   border: 2px dashed var(--line); border-radius: var(--radius);
@@ -608,6 +614,8 @@ section { padding: 100px 0; }
 .recall-toggle.on .recall-switch { background: var(--teal); }
 .recall-toggle.on .recall-switch::after { transform: translateX(16px); }
 .recall-toggle.on { color: var(--teal); }
+.privacy-toggle.on .recall-switch { background: var(--rose); }
+.privacy-toggle.on { color: var(--rose); }
 .dc-recall-row {
   display: flex; align-items: center; gap: 12px; margin-top: 10px;
   padding-top: 10px; border-top: 1px dashed var(--line);
@@ -794,6 +802,16 @@ section { padding: 100px 0; }
   margin-bottom: 16px;
   font-size: 14px;
   color: var(--teal);
+}
+.privacy-active {
+  border: 2px solid var(--rose);
+  border-radius: var(--radius);
+  padding: 16px;
+  background: #FCE7F3;
+  text-align: center;
+  margin-bottom: 16px;
+  font-size: 14px;
+  color: var(--rose);
 }
 
 /* personal empty placeholder */

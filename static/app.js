@@ -37,28 +37,126 @@ const profileName = () => localStorage.getItem("presenceProfile") || "default";
 async function api(path, opts = {}, skipJson) {
   opts = opts || {};
   opts.headers = Object.assign({}, opts.headers || {});
-  opts.headers["X-Presence-Profile"] = profileName();
+  opts.headers["X-Presence-Profile"] = encodeURIComponent(profileName());
   const r = await fetch(API + path, opts);
-  if (!r.ok) throw new Error(path + " " + r.status);
+  if (!r.ok) {
+    let msg = path + " " + r.status;
+    try {
+      const body = await r.json();
+      if (body && body.detail) msg += ": " + body.detail;
+    } catch (e) {}
+    throw new Error(msg);
+  }
   if (skipJson) return r;
   return r.json();
+}
+
+function refreshAll() {
+  return Promise.all([loadCards(), loadLedger(), loadRecall(), loadGraph()]);
 }
 
 // ---- Scenarios ----
 async function loadScenarios() {
   const data = await api("/api/scenarios");
   scenarios = data.scenarios;
+  if (selectedScenario === "custom") selectedScenario = "museum";
   const grid = document.getElementById("scenarioGrid");
-  grid.innerHTML = scenarios.map(s =>
-    '<div class="scenario-chip' + (s.key === selectedScenario ? " selected" : "") + '" data-key="' + s.key + '">' + s.name + "</div>"
+  let html = scenarios.filter(s => s.key !== "custom").map(s =>
+    '<div class="scenario-chip' + (s.key === selectedScenario ? " selected" : "") + '" data-key="' + escAttr(s.key) + '">' + esc(s.name) +
+    (s.is_custom ? '<button type="button" class="scenario-edit" data-key="' + escAttr(s.key) + '" title="重命名 / 删除">✎</button>' : "") +
+    "</div>"
   ).join("");
+  html += '<div class="scenario-chip scenario-add" data-key="__new_scene" title="新建自定义场景">＋ 自定义</div>';
+  grid.innerHTML = html;
   grid.querySelectorAll(".scenario-chip").forEach(el => {
-    el.onclick = () => {
+    el.onclick = (e) => {
+      if (e.target.closest(".scenario-edit")) return;
+      if (el.dataset.key === "__new_scene") { showNewScenarioModal(); return; }
       selectedScenario = el.dataset.key;
       grid.querySelectorAll(".scenario-chip").forEach(c => c.classList.remove("selected"));
       el.classList.add("selected");
     };
   });
+  grid.querySelectorAll(".scenario-edit").forEach(btn => {
+    btn.onclick = (e) => { e.stopPropagation(); showEditScenarioModal(btn.dataset.key); };
+  });
+}
+
+const CUSTOM_SCENE_PALETTE = ["#0EA5E9", "#10B981", "#F59E0B", "#EC4899", "#8B5CF6", "#14B8A6", "#F97316", "#84CC16"];
+function nextSceneAccent() {
+  return CUSTOM_SCENE_PALETTE[(scenarios || []).filter(s => s.is_custom).length % CUSTOM_SCENE_PALETTE.length];
+}
+function showNewScenarioModal() {
+  const body = document.getElementById("modalBody");
+  body.innerHTML =
+    '<div class="modal-body"><div class="modal-title">新建自定义场景</div>' +
+    '<div class="modal-section"><div class="modal-section-label">场景名称</div>' +
+    '<input class="personalization-input" id="newSceneName" maxlength="40" placeholder="例如：读书笔记 / 家庭生活"></div>' +
+    '<div class="modal-section"><div class="modal-section-label">图谱颜色</div>' +
+    '<input type="color" id="newSceneColor" value="' + nextSceneAccent() + '" style="width:100%;height:40px;border:1px solid var(--line);border-radius:8px;background:var(--bg-card);padding:4px;cursor:pointer"></div>' +
+    '<div style="display:flex;gap:8px;margin-top:12px">' +
+    '<button class="btn-primary" id="newSceneOK" style="flex:1">创建</button>' +
+    '<button class="btn-primary" id="newSceneCancel" style="flex:0;background:var(--bg-card);color:var(--ink);border:1px solid var(--line)">取消</button>' +
+    "</div></div>";
+  document.getElementById("cardModal").classList.add("show");
+  document.getElementById("newSceneOK").onclick = async () => {
+    const name = document.getElementById("newSceneName").value.trim();
+    if (!name) { alert("请输入场景名称"); return; }
+    const accent = document.getElementById("newSceneColor").value || nextSceneAccent();
+    try {
+      const created = await api("/api/scenarios", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name, accent: accent }) });
+      closeModal();
+      selectedScenario = created.key;
+      await loadScenarios();
+      await loadCards();
+      await loadGraph();
+    } catch (e) { alert("创建失败：" + e.message); }
+  };
+  document.getElementById("newSceneCancel").onclick = closeModal;
+  setTimeout(() => { const inp = document.getElementById("newSceneName"); if (inp) inp.focus(); }, 100);
+}
+function showEditScenarioModal(key) {
+  const s = (scenarios || []).find(x => x.key === key);
+  if (!s) return;
+  const body = document.getElementById("modalBody");
+  body.innerHTML =
+    '<div class="modal-body"><div class="modal-title">编辑自定义场景</div>' +
+    '<div class="modal-section"><div class="modal-section-label">场景名称</div>' +
+    '<input class="personalization-input" id="editSceneName" maxlength="40" value="' + escAttr(s.name) + '"></div>' +
+    '<div class="modal-section"><div class="modal-section-label">图谱颜色</div>' +
+    '<input type="color" id="editSceneColor" value="' + escAttr(s.accent || nextSceneAccent()) + '" style="width:100%;height:40px;border:1px solid var(--line);border-radius:8px;background:var(--bg-card);padding:4px;cursor:pointer"></div>' +
+    '<div style="display:flex;gap:8px;margin-top:12px">' +
+    '<button class="btn-primary" id="editSceneOK" style="flex:1">保存</button>' +
+    '<button class="btn-primary" id="editSceneDelete" style="flex:0;background:#7f1d1d;border-color:#7f1d1d;color:#fff">删除</button>' +
+    '<button class="btn-primary" id="editSceneCancel" style="flex:0;background:var(--bg-card);color:var(--ink);border:1px solid var(--line)">取消</button>' +
+    "</div></div>";
+  document.getElementById("cardModal").classList.add("show");
+  document.getElementById("editSceneOK").onclick = async () => {
+    const name = document.getElementById("editSceneName").value.trim();
+    if (!name) { alert("请输入场景名称"); return; }
+    try {
+      await api("/api/scenarios/" + encodeURIComponent(key), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name, accent: document.getElementById("editSceneColor").value || s.accent }) });
+      closeModal();
+      await loadScenarios();
+      await loadCards();
+      await loadLedger();
+      await loadGraph();
+    } catch (e) { alert("保存失败：" + e.message); }
+  };
+  document.getElementById("editSceneDelete").onclick = async () => {
+    if (!confirm("确定删除自定义场景「" + s.name + "」？\n该场景下的卡片会移回「自定义」。")) return;
+    try {
+      await api("/api/scenarios/" + encodeURIComponent(key), { method: "DELETE" });
+      if (selectedScenario === key) selectedScenario = "museum";
+      if (currentFilter === key) currentFilter = "all";
+      closeModal();
+      await loadScenarios();
+      await loadCards();
+      await loadLedger();
+      await loadGraph();
+    } catch (e) { alert("删除失败：" + e.message); }
+  };
+  document.getElementById("editSceneCancel").onclick = closeModal;
 }
 
 // ---- Tabs ----
@@ -79,12 +177,18 @@ function isVideoUrl(url) {
   if (!url) return false;
   return /\.(mp4|mov|webm|avi|mkv|m4v|3gp)(\?|$)/i.test(url);
 }
+function isAudioUrl(url) {
+  if (!url) return false;
+  return /\.(mp3|wav|m4a|ogg|aac|flac|weba)(\?|$)/i.test(url);
+}
 function mediaTag(url, cls, style) {
   if (!url) return "";
   cls = cls || "";
   style = style || "";
-  if (isVideoUrl(url)) return '<video ' + cls + ' ' + style + ' src="' + url + '" controls playsinline></video>';
-  return '<img ' + cls + ' ' + style + ' src="' + url + '" alt="">';
+  var safeUrl = escAttr(url);
+  if (isVideoUrl(url)) return '<video ' + cls + ' ' + style + ' src="' + safeUrl + '" controls playsinline></video>';
+  if (isAudioUrl(url)) return '<audio ' + cls + ' ' + style + ' src="' + safeUrl + '" controls preload="metadata"></audio>';
+  return '<img ' + cls + ' ' + style + ' src="' + safeUrl + '" alt="">';
 }
 
 // ---- In-browser audio recorder (MediaRecorder) ----
@@ -301,7 +405,6 @@ function setupUpload() {
   const camBtn = document.getElementById("capturePhotoBtn");
   const micBtn = document.getElementById("captureAudioBtn");
   const camInput = document.getElementById("cameraInput");
-  const micInput = document.getElementById("micInput");
   const vidBtn = document.getElementById("captureVideoBtn");
   const vidInput = document.getElementById("videoInput");
   if (camBtn && camInput) {
@@ -383,6 +486,7 @@ function renderFileList() {
 }
 function getFileIcon(type) {
   if (type.startsWith("image/")) return "🖼";
+  if (type.startsWith("video/")) return "\uD83C\uDFAC";
   if (type.startsWith("audio/")) return "🎙";
   return "📄";
 }
@@ -393,36 +497,39 @@ async function doAnalyze() {
   const btn = document.getElementById("analyzeBtn");
   const notes = document.getElementById("notesInput").value;
   const personalization = document.getElementById("personalizationInput").value;
+  const privacyToggle = document.getElementById("privacyModeToggle");
+  const privacyOn = !!(privacyToggle && privacyToggle.classList.contains("on"));
   if (selectedFiles.length === 0 && !notes.trim()) { alert("请上传至少一个素材，或输入文字备注"); return; }
-  btn.disabled = true; btn.textContent = "AI 正在提炼…";
+  btn.disabled = true; btn.textContent = privacyOn ? "本地整理中…" : "AI 正在提炼…";
   // Extract key frames from videos for visual AI analysis
   var sendFiles = selectedFiles.slice();
   var allFrames = [];
   var videoFiles = selectedFiles.filter(function(f) { return f.type.startsWith("video/"); });
-  if (videoFiles.length) {
+  if (!privacyOn && videoFiles.length) {
     btn.textContent = "提取视频关键帧…";
     for (var vi = 0; vi < videoFiles.length; vi++) {
       var vframes = await extractVideoFrames(videoFiles[vi], 3);
       allFrames = allFrames.concat(vframes);
     }
-    btn.textContent = "AI 正在提炼…";
+    btn.textContent = privacyOn ? "本地整理中…" : "AI 正在提炼…";
   }
   const fd = new FormData();
   fd.append("scene_type", selectedScenario);
   fd.append("personalization", personalization);
   fd.append("notes", notes);
   fd.append("quick_mode", "false");
+  fd.append("privacy_mode", privacyOn ? "true" : "false");
   for (const f of sendFiles) fd.append("files", f);
   for (const f of allFrames) fd.append("video_frames", f);
   try {
     const data = await api("/api/analyze", { method: "POST", body: fd });
-    renderDraftCards(data.cards, data.minutes_saved, data.ai_seconds, data.ai_used, data.ai_error);
+    renderDraftCards(data.cards, data.minutes_saved, data.ai_seconds, data.ai_used, data.ai_error, data.privacy_mode);
     selectedFiles = []; renderFileList();
     document.getElementById("notesInput").value = "";
     document.getElementById("personalizationInput").value = "";
   } catch (e) {
     if (!navigator.onLine || e instanceof TypeError) {
-      await queueOfflineAnalyze({ scene_type: selectedScenario, personalization: personalization, notes: notes, files: selectedFiles.slice() });
+      await queueOfflineAnalyze({ scene_type: selectedScenario, personalization: personalization, notes: notes, files: selectedFiles.slice(), privacy_mode: privacyOn });
       selectedFiles = []; renderFileList();
       document.getElementById("notesInput").value = "";
       document.getElementById("personalizationInput").value = "";
@@ -434,11 +541,13 @@ async function doAnalyze() {
     btn.disabled = false; btn.textContent = "生成记忆卡片 →";
   }
 }
-function renderDraftCards(drafts, minutes, aiSeconds, aiUsed, aiError) {
+function renderDraftCards(drafts, minutes, aiSeconds, aiUsed, aiError, privacyMode) {
   const container = document.getElementById("draftCards");
   if (!drafts.length) { container.innerHTML = '<div class="draft-empty">AI 认为本次素材中没有值得长期保存的内容</div>'; return; }
   let aiLabel;
-  if (aiUsed === false && aiError === "NOT_AN_ERROR") {
+  if (privacyMode) {
+    aiLabel = "🔒 隐私模式：未调用云端 AI / 语音识别，生成本地占位卡，请确认并补充描述。";
+  } else if (aiUsed === false && aiError === "NOT_AN_ERROR") {
     aiLabel = "🎵 AI 已接入，但未识别到可分析的语音内容（音乐/环境音等）。已保存为占位卡片，请补充描述。";
   } else if (aiUsed === false && aiError) {
     // Key was present but the real call failed — say so explicitly instead of
@@ -450,7 +559,11 @@ function renderDraftCards(drafts, minutes, aiSeconds, aiUsed, aiError) {
     aiLabel = "✨ AI 筛选出 " + drafts.length + " 条值得留存的内容 · 预估节省 " + minutes + " 分钟整理时间" + (aiSeconds ? " · AI 实际处理 " + Math.max(1, Math.round(aiSeconds)) + " 秒" : "");
   }
   let html = '<div style="font-size:13px;color:var(--ink-faint);margin-bottom:6px">' + aiLabel + "</div>";
-  html += '<div style="font-size:12px;color:var(--ink-faint);margin-bottom:12px;border-left:2px solid var(--line);padding-left:10px"><strong style="color:var(--ink-soft)">AI 的筛选依据：</strong>信息密度 · 独特性 · 长期价值。<span style="color:var(--ink-faint)">个人归因（为什么对你重要）由你补充——AI 不替你判断。</span></div>';
+  if (privacyMode) {
+    html += '<div style="font-size:12px;color:var(--ink-faint);margin-bottom:12px;border-left:2px solid var(--line);padding-left:10px"><strong style="color:var(--ink-soft)">本地占位：</strong>每条素材生成一张卡片，AI 未筛选也未读取素材内容，意义由你补充。</div>';
+  } else {
+    html += '<div style="font-size:12px;color:var(--ink-faint);margin-bottom:12px;border-left:2px solid var(--line);padding-left:10px"><strong style="color:var(--ink-soft)">AI 的筛选依据：</strong>信息密度 · 独特性 · 长期价值。<span style="color:var(--ink-faint)">个人归因（为什么对你重要）由你补充——AI 不替你判断。</span></div>';
+  }
   html += drafts.map(c =>
     '<div class="draft-card" data-id="' + c.id + '">' +
     (c.image_url ? mediaTag(c.image_url, '', 'style="width:100%;max-height:160px;object-fit:cover;border-radius:6px;margin-bottom:8px"') : "") +
@@ -470,7 +583,7 @@ function renderDraftCards(drafts, minutes, aiSeconds, aiUsed, aiError) {
     b.onclick = async () => {
       await api("/api/cards/" + b.dataset.id + "/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
       b.closest(".draft-card").style.opacity = "0.5"; b.textContent = "已保存 ✓"; b.disabled = true;
-      await loadCards(); await loadLedger(); await loadRecall();
+      await refreshAll();
     };
   });
   container.querySelectorAll(".dc-btn.edit").forEach(b => { b.onclick = () => { const card = drafts.find(c => c.id == b.dataset.id); openEditModal(card); }; });
@@ -532,7 +645,11 @@ function renderFolderView() {
   var allIds = [];
   grid.innerHTML = batches.map(function(b) {
     const folderCards = cards.filter(function(c) { return c.batch_id === b.batch_id && c.status !== "deleted"; });
-    const sName = (scenarios.find(function(s) { return s.key === b.scene_type; }) || {}).name || b.scene_type;
+    const bScene = scenarios.find(function(s) { return s.key === b.scene_type; }) || {};
+    const sName = bScene.name || b.scene_type;
+    const sceneStyle = (bScene.is_custom && bScene.accent && /^#[0-9a-fA-F]{6}$/.test(bScene.accent))
+      ? ' style="background:' + bScene.accent + '26;color:' + bScene.accent + ';border-bottom:2px solid ' + bScene.accent + '"'
+      : "";
     const dispTitle = b.is_unfiled ? "未分类" : (b.name || b.title || sName);
     var fc = folderCards;
     // in batch mode, track all card ids
@@ -542,7 +659,7 @@ function renderFolderView() {
     return '<div class="batch-folder' + (batchMode ? " batch-on" : "") + '" data-batch="' + esc(b.batch_id) + '">' +
       '<div class="batch-header">' +
         folderIcon +
-        '<span class="batch-scene scene-' + b.scene_type + '">' + esc(sName) + '</span>' +
+        '<span class="batch-scene scene-' + b.scene_type + '"' + sceneStyle + '>' + esc(sName) + '</span>' +
         '<span class="batch-title">' + esc(dispTitle) + "</span>" +
         '<span class="batch-meta">' + esc(b.source_date || "") + ' · ' + fc.length + " 张</span>" +
         '<span class="batch-actions">' +
@@ -658,7 +775,7 @@ function showRenameModal(fid) {
     var nv = document.getElementById("renameInput").value.trim();
     if (!nv) { alert("名称不能为空"); return; }
     closeModal();
-    fetch("/api/folders/" + encodeURIComponent(fid), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: nv }) }).then(function() { return loadCards(); });
+    api("/api/folders/" + encodeURIComponent(fid), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: nv }) }).then(function() { return refreshAll(); });
   };
   document.getElementById("renameCancel").onclick = function() { closeModal(); };
   setTimeout(function() { var inp = document.getElementById("renameInput"); if(inp) inp.focus(); }, 100);
@@ -684,7 +801,7 @@ function showMergeModal(fid) {
     var targetId = document.getElementById("mergePick").value;
     if (!targetId) { alert("请选择目标文件夹"); return; }
     closeModal();
-    fetch("/api/folders/merge", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source_id: fid, target_id: targetId }) }).then(function() { return loadCards(); });
+    api("/api/folders/merge", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source_id: fid, target_id: targetId }) }).then(function() { return refreshAll(); });
   };
   document.getElementById("mergeCancel").onclick = function() { closeModal(); };
 }
@@ -694,10 +811,10 @@ function confirmDeleteFolder(fid) {
   var name = b.name || b.title || "";
   if (!confirm("确定删除文件夹「" + name + "」？\n卡片将移到「未分类」。")) return;
   var wipe = confirm("是否同时删除文件夹内的所有卡片？\n点「取消」则仅删文件夹、卡片移到「未分类」。");
-  fetch("/api/folders/" + encodeURIComponent(fid) + "?delete_cards=" + (wipe ? "true" : "false"), { method: "DELETE" }).then(function() { return loadCards(); }).then(function() { loadLedger(); loadRecall(); });
+  api("/api/folders/" + encodeURIComponent(fid) + "?delete_cards=" + (wipe ? "true" : "false"), { method: "DELETE" }).then(function() { return refreshAll(); });
 }
 function moveCardTo(cardId, folderId) {
-  fetch("/api/cards/" + cardId + "/move", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ folder_id: folderId }) }).then(function() { return loadCards(); });
+  api("/api/cards/" + cardId + "/move", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ folder_id: folderId }) }).then(function() { return refreshAll(); });
 }
 
 // ---- Batch management ----
@@ -761,7 +878,7 @@ function batchMoveSelected() {
   opts += '<option value="">未分类</option>';
   showFolderPicker("将 " + ids.length + " 张卡片移入", opts, function(fid){
     if (fid === null) return;
-    fetch("/api/batch/move", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ card_ids: ids, folder_id: fid }) }).then(function(){ toggleBatchMode(false); return loadCards(); });
+    api("/api/batch/move", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ card_ids: ids, folder_id: fid }) }).then(function(){ toggleBatchMode(false); return refreshAll(); });
   });
 }
 function toggleFolderSelect(fid) {
@@ -775,7 +892,7 @@ function batchDeleteSelected() {
   var ids = selectedIdList();
   if (!ids.length) { alert("请先勾选要删除的卡片"); return; }
   if (!confirm("确定删除选中的 " + ids.length + " 张卡片？此操作不可撤销。")) return;
-  fetch("/api/batch/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ card_ids: ids }) }).then(function(){ toggleBatchMode(false); return loadCards(); }).then(function(){ loadLedger(); loadRecall(); });
+  api("/api/batch/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ card_ids: ids }) }).then(function(){ toggleBatchMode(false); return refreshAll(); });
 }
 function showFolderPicker(title, optsHTML, callback) {
   var body = document.getElementById("modalBody");
@@ -796,8 +913,9 @@ function showFolderPicker(title, optsHTML, callback) {
 async function loadLedger() {
   const stats = await api("/api/ledger");
   const grid = document.getElementById("ledgerGrid");
-  const sceneNames = {}; scenarios.forEach(s => sceneNames[s.key] = s.name);
+  const sceneNames = {};
   const colors = { enterprise: "#0F766E", museum: "#B45309", meeting: "#7C3AED", class: "#2563EB", travel: "#DB2777", custom: "#525252" };
+  scenarios.forEach(s => { sceneNames[s.key] = s.name; if (s.accent) colors[s.key] = s.accent; });
   const aiSecs = stats.total_analysis_seconds || 0;
   const recallSecs = stats.total_recall_seconds || 0;
   const aiTxt = aiSecs >= 60 ? (aiSecs / 60).toFixed(1) + " min" : Math.round(aiSecs) + " s";
@@ -859,14 +977,24 @@ function renderRecall() {
   var _startTs = recallStartTs;
   container.querySelectorAll(".recall-diff-btn").forEach(b => {
     b.onclick = async () => {
+      container.querySelectorAll(".recall-diff-btn").forEach(x => x.disabled = true);
       const secs = Math.max(1, Math.round((Date.now() - _startTs) / 1000));
-      await api("/api/recall/" + card.id + "/attempt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ difficulty: parseInt(b.dataset.d), seconds: secs }) });
-      recallIndex++; renderRecall(); await loadCards(); await loadLedger();
+      var tryText = (document.getElementById("recallTry").value || "").trim();
+      const res = await api("/api/recall/" + card.id + "/attempt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ difficulty: parseInt(b.dataset.d), seconds: secs, user_text: tryText }) });
+      if (res.recall_match_rate != null) {
+        var pct = Math.round(res.recall_match_rate * 100);
+        var tag = document.createElement("div");
+        tag.className = "recall-match";
+        tag.innerHTML = "<span>关键词重合度：" + pct + "%</span>";
+        b.closest(".recall-card").appendChild(tag);
+        await new Promise(r => setTimeout(r, 1200));
+      }
+      recallIndex++; renderRecall(); await refreshAll();
     };
   });
 }
 function getRecallHint(card) {
-  if (card.tags && card.tags.length) return "关于「" + card.tags[0] + "」，你记得什么？";
+  if (card.tags && card.tags.length) return "关于「" + esc(card.tags[0]) + "」，你记得什么？";
   return "你记得关于这张卡片的什么内容？";
 }
 
@@ -902,7 +1030,7 @@ function openEditModal(card) {
   if (editToggle) editToggle.onclick = function() { var on = !editToggle.classList.contains("on"); editToggle.classList.toggle("on", on); editToggle.querySelector("span:last-child").textContent = on ? "已开启" : "点击开启"; };
   document.getElementById("saveEdit").onclick = async () => {
     await api("/api/cards/" + card.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ recall_enabled: !!document.getElementById("editRecallToggle") && document.getElementById("editRecallToggle").classList.contains("on"), title: document.getElementById("editTitle").value, summary: document.getElementById("editSummary").value, personal: document.getElementById("editPersonal").value, tags: (document.getElementById("editTags").value || "").split(",").map(t => t.trim()).filter(t => t), status: "confirmed" }) });
-    closeModal(); await loadCards();
+    closeModal(); await refreshAll();
   };
 }
 async function loadConnections(cardId) {
@@ -940,12 +1068,12 @@ function escAttr(s) { if (!s) return ""; return esc(s); }
 async function deleteCard(cardId) {
   if (!confirm("确定删除这张卡片吗？")) return;
   await api("/api/cards/" + cardId, { method: "DELETE" });
-  closeModal(); await loadCards(); await loadLedger(); await loadRecall();
+  closeModal(); await refreshAll();
 }
 async function toggleRecall(cardId, on, el) {
   await api("/api/cards/" + cardId, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ recall_enabled: on }) });
   if (el) { el.classList.toggle("on", on); var label = el.querySelector("span:last-child"); if (label) label.textContent = on ? "已开启回忆" : "开启回忆"; }
-  await loadCards(); await loadLedger(); await loadRecall();
+  await refreshAll();
 }
 
 // ---- Multi-profile ----
@@ -970,7 +1098,7 @@ async function switchProfile(name) {
   document.cookie = "presence_profile=" + encodeURIComponent(name) + "; path=/; SameSite=Lax";
   await api("/api/profile", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name }) });
   await loadProfiles();
-  await Promise.all([loadCards(), loadLedger(), loadRecall(), loadGraph()]);
+  await Promise.all([loadScenarios(), loadCards(), loadLedger(), loadRecall(), loadGraph()]);
 }
 function setupProfile() {
   if (!document.cookie.split("; ").some(c => c.indexOf("presence_profile=") === 0)) {
@@ -1030,7 +1158,7 @@ async function handleSharedContent() {
 let deferredInstallPrompt = null;
 function setupPWA() {
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/static/sw.js").catch(function(){});
+    navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(function(){});
   }
   window.addEventListener("beforeinstallprompt", function(e) {
     e.preventDefault();
@@ -1151,7 +1279,9 @@ async function loadGraph() {
     var clearBtn = document.getElementById("clearConnBtn");
     if (clearBtn) clearBtn.style.display = (data.ai_links && data.ai_links.length) ? "" : "none";
     if (has3d && window.Graph3D.isReady) {
-      window.Graph3D.render(wrap, data, onGraphCardClick, toggleConnectionLock);
+      var sceneNames = {}, sceneColors = {};
+      scenarios.forEach(function(s) { sceneNames[s.key] = s.name; if (s.is_custom && s.accent) sceneColors[s.key] = hexColorToInt(s.accent); });
+      window.Graph3D.render(wrap, data, onGraphCardClick, toggleConnectionLock, { sceneNames: sceneNames, sceneColors: sceneColors });
     } else {
       renderGraph(wrap, data);
     }
@@ -1210,11 +1340,13 @@ function renderGraph(wrap, data) {
     }
   }
   const sceneColors = { enterprise: "#0F766E", museum: "#B45309", meeting: "#7C3AED", class: "#2563EB", travel: "#DB2777", custom: "#57534E" };
+  scenarios.forEach(s => { if (s.accent) sceneColors[s.key] = s.accent; });
+  const sceneNames = {}; scenarios.forEach(s => sceneNames[s.key] = s.name);
   let svg = '<svg viewBox="0 0 ' + W + " " + H + '" width="100%" height="' + H + '" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="记忆图谱">';
   for (const l of links) {
     const a = nodeMap[l.source], b = nodeMap[l.target];
     if (!a || !b) continue;
-    svg += '<line x1="' + a.x.toFixed(1) + '" y1="' + a.y.toFixed(1) + '" x2="' + b.x.toFixed(1) + '" y2="' + b.y.toFixed(1) + '" stroke="rgba(28,25,23,0.14)" stroke-width="1"/>';
+    svg += '<line x1="' + a.x.toFixed(1) + '" y1="' + a.y.toFixed(1) + '" x2="' + b.x.toFixed(1) + '" y2="' + b.y.toFixed(1) + '" stroke="rgba(190,24,93,0.75)" stroke-width="1.2"/>';
   }
   var aiLinks = (data.ai_links || []);
   for (const al of aiLinks) {
@@ -1230,7 +1362,7 @@ function renderGraph(wrap, data) {
     } else {
       const color = sceneColors[n.scene] || "#57534E";
       svg += '<g class="graph-card-node" data-id="' + escAttr(n.card.card_id) + '" style="cursor:pointer">';
-      svg += '<rect x="' + (n.x - 58).toFixed(1) + '" y="' + (n.y - 15).toFixed(1) + '" width="116" height="30" rx="6" fill="#FFFFFF" stroke="' + color + '" stroke-width="1.4"/>';
+      svg += '<rect x="' + (n.x - 58).toFixed(1) + '" y="' + (n.y - 15).toFixed(1) + '" width="116" height="30" rx="6" fill="#FFFFFF" stroke="' + color + '" stroke-width="1.4"><title>' + esc(sceneNames[n.scene] || n.scene) + "</title></rect>";
       svg += '<text x="' + n.x.toFixed(1) + '" y="' + (n.y + 4).toFixed(1) + '" text-anchor="middle" font-size="10.5" fill="#1C1917">' + esc(truncateLabel(n.label, 14)) + "</text>";
       svg += "</g>";
     }
@@ -1254,6 +1386,10 @@ function renderGraph(wrap, data) {
 function truncateLabel(s, max) {
   s = String(s || "");
   return s.length > max ? s.slice(0, max) + "…" : s;
+}
+function hexColorToInt(hex) {
+  const v = String(hex || "").replace("#", "");
+  return /^[0-9a-fA-F]{6}$/.test(v) ? parseInt(v, 16) : null;
 }
 
 // ---- Offline queue ----
@@ -1304,7 +1440,18 @@ async function flushOfflineQueue() {
     fd.append("scene_type", item.scene_type || "custom");
     fd.append("personalization", item.personalization || "");
     fd.append("notes", item.notes || "");
+    fd.append("quick_mode", item.quick_mode ? "true" : "false");
+    fd.append("privacy_mode", item.privacy_mode ? "true" : "false");
     (item.files || []).forEach(f => fd.append("files", f));
+    if (!item.privacy_mode) {
+      const videoFiles = (item.files || []).filter(f => f.type && f.type.startsWith("video/"));
+      if (videoFiles.length) {
+        try {
+          const allFrames = await Promise.all(videoFiles.map(vf => extractVideoFrames(vf, 3)));
+          allFrames.forEach(fr => fr.forEach(f => fd.append("video_frames", f)));
+        } catch (e) {}
+      }
+    }
     try {
       const d = await api("/api/analyze", { method: "POST", body: fd });
       for (const c of (d.cards || [])) {
@@ -1317,7 +1464,7 @@ async function flushOfflineQueue() {
     }
   }
   renderOfflineStatus();
-  await loadCards(); await loadLedger(); await loadRecall();
+  await refreshAll();
 }
 function renderOfflineStatus(message) {
   const el = document.getElementById("offlineStatus");

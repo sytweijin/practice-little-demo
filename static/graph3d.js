@@ -11,6 +11,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     enterprise: "\u4f01\u4e1a\u53c2\u8bbf", museum: "\u5c55\u89c8\u9986",
     meeting: "\u4f1a\u8bae", class: "\u8bfe\u7a0b", travel: "\u65c5\u884c", custom: "\u81ea\u5b9a\u4e49"
   };
+  var sceneColors = Object.assign({}, SCENE_COLORS);
+  var sceneNames = Object.assign({}, SCENE_NAMES);
   var state = null;
 
   function dispose() {
@@ -81,8 +83,11 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
-  function render(container, data, onCardClick, onToggleLock) {
+  function render(container, data, onCardClick, onToggleLock, options) {
     dispose();
+    options = options || {};
+    sceneColors = Object.assign({}, SCENE_COLORS, options.sceneColors || {});
+    sceneNames = Object.assign({}, SCENE_NAMES, options.sceneNames || {});
     var cards = (data.cards || []).slice();
     var links = data.links || [];
     var aiLinks = data.ai_links || [];
@@ -197,7 +202,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
     // ---- Cluster halos ----
     Object.keys(centers).forEach(function (st) {
-      var color = SCENE_COLORS[st] || SCENE_COLORS.custom;
+      var color = sceneColors[st] || sceneColors.custom;
       var halo = new THREE.Sprite(new THREE.SpriteMaterial({
         map: glowTex, color: color, transparent: true, opacity: 0.04,
         blending: THREE.AdditiveBlending, depthWrite: false
@@ -218,7 +223,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         ctr.y + (Math.random() - 0.5) * 36,
         ctr.z + Math.sin(a) * rr + (Math.random() - 0.5) * 12
       );
-      var color = SCENE_COLORS[card.scene_type] || SCENE_COLORS.custom;
+      var color = sceneColors[card.scene_type] || sceneColors.custom;
       var mesh = new THREE.Mesh(cardGeo, new THREE.MeshBasicMaterial({ color: color }));
       mesh.position.copy(pos);
       mesh.userData = { card: card, phase: Math.random() * 6.28, color: color };
@@ -245,7 +250,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     });
 
     // ---- Connection lines ----
-    // Shared-tag links: cards with matching tags get connected (rose)
+    // Shared-tag links: cards with matching tags get connected (deep pink).
+    var SHARED_DEEP = 0xbe185d, SHARED_LIGHT = 0xfda4af;
     var sharedLP = [];
     var seenPairs = {};
     var tagToCards = {};
@@ -269,14 +275,12 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         }
       }
     });
-
-
     var tagLines = [];
     if (sharedLP.length) {
       var sg = new THREE.BufferGeometry();
       sg.setAttribute('position', new THREE.Float32BufferAttribute(sharedLP, 3));
       scene.add(new THREE.LineSegments(sg, new THREE.LineBasicMaterial({
-        color: 0xf43f5e, transparent: true, opacity: 0.28,
+        color: SHARED_DEEP, transparent: true, opacity: 0.6,
         blending: THREE.AdditiveBlending, depthWrite: false
       })));
     }
@@ -324,12 +328,13 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
           lg.setAttribute('position', new THREE.Float32BufferAttribute([
             a._p.x, a._p.y, a._p.z, b._p.x, b._p.y, b._p.z
           ], 3));
+          var baseColor = SHARED_DEEP;
           var lm = new THREE.LineBasicMaterial({
-            color: 0xf43f5e, transparent: true, opacity: 0,
+            color: baseColor, transparent: true, opacity: 0,
             blending: THREE.AdditiveBlending, depthWrite: false
           });
           var line = new THREE.Line(lg, lm);
-          line.userData = { tag: tag, cardA: group[i], cardB: group[j], pa: a._p.clone(), pb: b._p.clone() };
+          line.userData = { tag: tag, cardA: group[i], cardB: group[j], pa: a._p.clone(), pb: b._p.clone(), baseColor: baseColor };
           scene.add(line);
           tagLines.push(line);
         }
@@ -339,7 +344,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     var cLabels = [];
     Object.keys(centers).forEach(function (st) {
       var el = document.createElement('div');
-      el.textContent = SCENE_NAMES[st] || st;
+      el.textContent = sceneNames[st] || st;
       el.style.cssText = 'position:absolute;pointer-events:none;transform:translate(-50%,-50%);' +
         'font-size:14px;font-weight:700;letter-spacing:4px;color:rgba(255,255,255,0.42);' +
         'text-shadow:0 0 20px rgba(255,255,255,0.35),0 0 6px rgba(0,0,0,0.8);white-space:nowrap;z-index:1;';
@@ -447,11 +452,14 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
       }
       // Tag line hover: brighten line + show tag tooltip
       if (nl !== state.hovLine) {
-        if (state.hovLine) state.hovLine.material.opacity = 0;
+        if (state.hovLine) {
+          state.hovLine.material.opacity = 0;
+          state.hovLine.material.color.setHex(state.hovLine.userData.baseColor || SHARED_DEEP);
+        }
         state.hovLine = nl;
         if (nl) {
           nl.material.opacity = 0.9;
-          nl.material.color.setHex(0xfb7185);
+          nl.material.color.setHex(SHARED_LIGHT);
           renderer.domElement.style.cursor = 'pointer';
         }
       }
@@ -515,14 +523,14 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
             c.tags.map(function (tg) { return '#' + escH(tg); }).join(' ') + '</div>';
         }
         tip.innerHTML = '<div style="font-weight:600;margin-bottom:2px;color:#f1f5f9">' + escH(c.title) + '</div>' +
-          '<div style="font-size:11px;color:' + hex + '">' + (SCENE_NAMES[c.scene_type] || c.scene_type) + '</div>' + th2;
+          '<div style="font-size:11px;color:' + hex + '">' + (sceneNames[c.scene_type] || c.scene_type) + '</div>' + th2;
       } else if (state.hovLine) {
         var mp = state.hovLine.userData.pa.clone().lerp(state.hovLine.userData.pb, 0.5);
         var pp = project(mp);
         tip.style.display = 'block';
         tip.style.left = Math.min(pp.x + 18, renderer.domElement.clientWidth - 200) + 'px';
         tip.style.top = Math.max(pp.y - 20, 0) + 'px';
-        tip.innerHTML = '<div style="font-weight:600;color:#f43f5e">#' + escH(state.hovLine.userData.tag) + '</div>' +
+        tip.innerHTML = '<div style="font-weight:600;color:#be185d">#' + escH(state.hovLine.userData.tag) + '</div>' +
           '<div style="font-size:11px;color:#94a3b8;margin-top:2px">\u5171\u4eab\u6807\u7b7e\u8054\u7ed3</div>';
       } else if (state.hovAiLine) {
         var am = state.hovAiLine.userData.pa.clone().lerp(state.hovAiLine.userData.pb, 0.5);

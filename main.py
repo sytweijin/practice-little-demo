@@ -3,7 +3,13 @@
 import os
 import json
 import time
+import re
+import zipfile
+import io
+import csv
 import ipaddress
+import sqlite3
+import urllib.parse
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -27,6 +33,12 @@ class ProfileMiddleware(BaseHTTPMiddleware):
         if not profile:
             profile = request.cookies.get("presence_profile", "").strip()
         if profile:
+            try:
+                # Browsers percent-encode non-ASCII header values, so the
+                # header must be decoded before it is used as a profile name.
+                profile = urllib.parse.unquote(profile)
+            except Exception:
+                pass
             memory.set_profile(profile)
         try:
             resp = await call_next(request)
@@ -35,7 +47,7 @@ class ProfileMiddleware(BaseHTTPMiddleware):
         return resp
 
 
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 try:
     from dotenv import load_dotenv
@@ -56,9 +68,29 @@ STATIC_DIR.mkdir(exist_ok=True)
 (STATIC_DIR / "uploads").mkdir(exist_ok=True)
 (STATIC_DIR / "assets").mkdir(exist_ok=True)
 
+MAX_UPLOAD_BYTES = 512 * 1024 * 1024
+ORPHAN_UPLOAD_MAX_AGE_SECONDS = 7 * 24 * 3600
+
 CERT_DIR = Path(__file__).parent / "cert"
 CERT_FILE = CERT_DIR / "cert.pem"
 KEY_FILE = CERT_DIR / "key.pem"
+
+
+def _read_upload(upload_file, max_bytes):
+    """Read an upload with a hard size cap.
+    UploadFile.size is often None for multipart bodies, so the limit is
+    enforced while reading instead of trusting the reported size."""
+    chunks = []
+    total = 0
+    while True:
+        chunk = upload_file.file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(413, "File too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 from contextlib import asynccontextmanager
@@ -67,6 +99,7 @@ from contextlib import asynccontextmanager
 async def lifespan(app_instance):
     memory.init_db()
     seed_if_empty()
+    _cleanup_orphan_uploads()
     yield
 
 app = FastAPI(title="Memory Cards API", lifespan=lifespan)
@@ -94,7 +127,10 @@ def api_set_profile(data: ProfileInput):
     name = (data.name or "").strip() or "default"
     memory.set_profile(name)
     memory.init_db()
-    seed_if_empty()
+    # Seed demo data ONLY for the default profile; user-created profiles
+    # start completely empty so they never see AMD/SenseTime demo cards.
+    if name == "default":
+        seed_if_empty()
     return {"profile": name, "profiles": memory.list_profiles()}
 
 
@@ -113,7 +149,48 @@ def api_folders(include_unfiled: bool = True):
 # ---- Scenarios ----
 @app.get("/api/scenarios")
 def api_scenarios():
-    return {"scenarios": SCENARIO_LIST}
+    return {"scenarios": SCENARIO_LIST + memory.list_custom_scenes()}
+
+
+class ScenarioInput(BaseModel):
+    name: str = ""
+    accent: str = None
+
+
+def _clean_accent(value):
+    value = (value or "").strip()
+    if re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+        return value
+    return None
+
+
+@app.post("/api/scenarios")
+def api_create_scenario(data: ScenarioInput):
+    name = (data.name or "").strip()
+    if not name:
+        raise HTTPException(400, "场景名称不能为空")
+    if len(name) > 40:
+        raise HTTPException(400, "场景名称最多 40 个字符")
+    return memory.create_custom_scene(name, _clean_accent(data.accent))
+
+
+@app.put("/api/scenarios/{key}")
+def api_update_scenario(key: str, data: ScenarioInput):
+    name = (data.name or "").strip()
+    if not name:
+        raise HTTPException(400, "场景名称不能为空")
+    if len(name) > 40:
+        raise HTTPException(400, "场景名称最多 40 个字符")
+    scene = memory.update_custom_scene(key, name, _clean_accent(data.accent))
+    if not scene:
+        raise HTTPException(404, "自定义场景不存在")
+    return scene
+
+
+@app.delete("/api/scenarios/{key}")
+def api_delete_scenario(key: str):
+    memory.delete_custom_scene(key)
+    return {"ok": True}
 
 
 # ---- Cards ----
@@ -167,17 +244,18 @@ def api_delete_card(card_id: int):
 
 # ---- Analyze (upload + AI) ----
 @app.post("/api/analyze")
-async def api_analyze(
+def api_analyze(
     scene_type: str = Form("custom"),
     personalization: str = Form(""),
     notes: str = Form(""),
     quick_mode: bool = Form(False),
+    privacy_mode: bool = Form(False),
     files: list[UploadFile] = File(default=[]),
     video_frames: list[UploadFile] = File(default=[]),
 ):
     materials = []
     for f in files:
-        content = await f.read()
+        content = _read_upload(f, MAX_UPLOAD_BYTES)
         url = llm.save_upload(f.filename, content)
         ext = Path(f.filename).suffix.lower()
         ctype = (f.content_type or "").lower()
@@ -190,16 +268,19 @@ async def api_analyze(
         if ctype.startswith("audio/") or ext in (".mp3", ".wav", ".m4a", ".ogg", ".aac", ".flac"):
             materials.append({"kind": "audio", "url": url, "name": f.filename, "ref": ""})
         elif ctype.startswith("image/") or ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
-            materials.append({"kind": "image", "url": url, "name": f.filename, "ref": ""})
+            mime = ctype if ctype.startswith("image/") else ("image/" + (ext.lstrip(".") or "jpeg"))
+            materials.append({"kind": "image", "url": url, "name": f.filename, "ref": "", "mime": mime})
         else:
-            materials.append({"kind": "text", "url": url, "name": f.filename, "ref": content.decode("utf-8", errors="ignore")[:500]})
+            ref = "" if ext == ".pdf" else content.decode("utf-8", errors="ignore")[:500]
+            materials.append({"kind": "text", "url": url, "name": f.filename, "ref": ref})
 
     # Video frames extracted by the browser for AI visual analysis.
     # These are internal: they feed the vision API but never become standalone cards.
     for f in video_frames:
-        content = await f.read()
+        content = _read_upload(f, MAX_UPLOAD_BYTES)
         url = llm.save_upload(f.filename, content)
-        materials.append({"kind": "frame", "url": url, "name": f.filename, "ref": ""})
+        materials.append({"kind": "frame", "url": url, "name": f.filename, "ref": "",
+                          "mime": (f.content_type or "image/jpeg")})
 
     if notes.strip():
         materials.append({"kind": "text", "url": "", "name": "notes", "ref": notes.strip()})
@@ -208,14 +289,16 @@ async def api_analyze(
         raise HTTPException(400, "No materials provided")
 
     t0 = time.monotonic()
-    cards_data, ai_used, ai_error = llm.analyze_materials(materials, scene_type, personalization)
+    cards_data, ai_used, ai_error = llm.analyze_materials(
+        materials, scene_type, personalization, privacy_mode=privacy_mode
+    )
     ai_seconds = max(0.0, time.monotonic() - t0)
     scenario = get_scenario(scene_type)
     if ai_error:
         print("[analyze] AI call failed but key present:", ai_error)
 
     # Save as draft cards
-    batch_id = str(int(datetime.now().timestamp()))
+    batch_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
     saved = []
     for cd in cards_data:
         cd["scene_type"] = scene_type
@@ -230,14 +313,7 @@ async def api_analyze(
     minutes = real_count * scenario["minutes_per_material"]
     memory.record_ledger(scene_type, real_count, minutes, len(saved), ai_seconds=ai_seconds, quick_mode=quick_mode)
 
-    return {"cards": saved, "materials_count": real_count, "minutes_saved": minutes, "ai_seconds": round(ai_seconds, 1), "ai_used": ai_used, "ai_error": ai_error, "quick_mode": quick_mode}
-
-
-class ConfirmInput(BaseModel):
-    title: str = None
-    summary: str = None
-    personal: str = None
-    tags: list = None
+    return {"cards": saved, "materials_count": real_count, "minutes_saved": minutes, "ai_seconds": round(ai_seconds, 1), "ai_used": ai_used, "ai_error": ai_error, "quick_mode": quick_mode, "privacy_mode": privacy_mode}
 
 
 @app.post("/api/cards/{card_id}/confirm")
@@ -269,7 +345,8 @@ def api_recall_due(scene_type: str = None):
 def api_recall_attempt(card_id: int, data: dict):
     difficulty = data.get("difficulty", 1)
     seconds = data.get("seconds", 0)
-    card = memory.record_recall(card_id, difficulty, seconds=seconds)
+    user_text = data.get("user_text", "")
+    card = memory.record_recall(card_id, difficulty, seconds=seconds, user_text=user_text)
     if not card:
         raise HTTPException(404, "Card not found")
     return card
@@ -348,13 +425,134 @@ def api_card_connections(card_id: int):
 @app.get("/api/export")
 def api_export(format: str = "json", full: bool = False):
     if full:
-        snapshot = memory.export_full_snapshot()
-        return JSONResponse(content=snapshot,
-                           headers={"Content-Disposition": "attachment; filename=presence_snapshot.json"})
+        return _export_zip()
     cards = memory.export_cards_data()
     if format == "json":
         return JSONResponse(content={"cards": cards, "exported_at": datetime.now().isoformat()},
                            headers={"Content-Disposition": "attachment; filename=presence_backup.json"})
+    if format == "csv":
+        return _export_csv(cards)
+    raise HTTPException(400, "Unsupported export format: " + format)
+
+
+def _export_csv(cards):
+    """Export cards as CSV (Anki-importable: Front,Back,Tags)."""
+    buf = io.StringIO()
+    buf.write("\ufeff")  # BOM for Excel
+    w = csv.writer(buf)
+    w.writerow(["Front", "Back", "Tags", "Scene", "Date", "Personal"])
+    for c in cards:
+        front = c.get("title", "")
+        parts = [c.get("summary", "")]
+        if c.get("personal"):
+            parts.append(c["personal"])
+        back = "\n".join(parts)
+        tags = " ".join(c.get("tags") or [])
+        w.writerow([front, back, tags,
+                    c.get("scene_type", ""),
+                    c.get("source_date", ""),
+                    c.get("personal", "")])
+    fname = "presence_cards_" + datetime.now().strftime("%Y%m%d") + ".csv"
+    return Response(
+        content=buf.getvalue(), media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=" + fname})
+
+
+def _cleanup_orphan_uploads():
+    """Delete uploads not referenced by any profile and older than 7 days.
+    Failed or abandoned analyses otherwise leak files forever."""
+    try:
+        referenced = set()
+        for db in memory.DB_DIR.glob("memory*.db"):
+            try:
+                conn = sqlite3.connect(str(db), timeout=5)
+                rows = conn.execute(
+                    "SELECT image_url FROM cards WHERE image_url != '' AND status != 'deleted'"
+                ).fetchall()
+                conn.close()
+            except Exception:
+                continue
+            for (url,) in rows:
+                if url and url.startswith("/static/uploads/"):
+                    referenced.add(url[len("/static/uploads/"):])
+        cutoff = time.time() - ORPHAN_UPLOAD_MAX_AGE_SECONDS
+        uploads = STATIC_DIR / "uploads"
+        for f in uploads.iterdir():
+            try:
+                if f.is_file() and f.name not in referenced and f.stat().st_mtime < cutoff:
+                    f.unlink()
+            except OSError:
+                pass
+    except Exception as e:
+        print("[cleanup] upload cleanup skipped:", e)
+
+
+def _export_zip():
+    """Bundle snapshot.json + all referenced media files into one zip so a
+    backup survives a device switch with zero broken links."""
+    snapshot = memory.export_full_snapshot()
+    uploads_root = (STATIC_DIR / "uploads").resolve()
+    media_paths = set()
+    for c in snapshot.get("cards", []):
+        url = c.get("image_url") or ""
+        if url.startswith("/static/uploads/"):
+            rel = url[len("/static/uploads/"):]
+            abs_path = (uploads_root / rel).resolve()
+            # Never let a crafted image_url pull files from outside uploads/.
+            if abs_path.is_relative_to(uploads_root) and abs_path.is_file():
+                arc = "uploads/" + abs_path.relative_to(uploads_root).as_posix()
+                media_paths.add((abs_path, arc))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("snapshot.json", json.dumps(snapshot, ensure_ascii=False, indent=2))
+        for abs_path, arc in sorted(media_paths, key=lambda x: x[1]):
+            zf.write(abs_path, arc)
+    data = buf.getvalue()
+    fname = "presence_backup_" + datetime.now().strftime("%Y%m%d") + ".zip"
+    return Response(
+        content=data, media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=" + fname})
+
+
+@app.post("/api/import-zip")
+def api_import_zip(file: UploadFile = File(...)):
+    """Restore a full backup zip: snapshot.json + media files.
+    Restores cards/narratives/connections/folders via smart_import and
+    copies media files back into static/uploads/."""
+    raw = _read_upload(file, MAX_UPLOAD_BYTES)
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "Not a valid zip file")
+    names = zf.namelist()
+    snap_name = "snapshot.json" if "snapshot.json" in names else None
+    if not snap_name:
+        for n in names:
+            if n.endswith("snapshot.json") or n.endswith("/snapshot.json"):
+                snap_name = n; break
+    if not snap_name:
+        raise HTTPException(400, "snapshot.json not found inside the zip")
+    try:
+        snapshot = json.loads(zf.read(snap_name))
+    except ValueError:
+        raise HTTPException(400, "snapshot.json is not valid JSON")
+    uploaded_root = STATIC_DIR / "uploads"
+    uploaded_root.mkdir(parents=True, exist_ok=True)
+    media_count = 0
+    for n in names:
+        if n == snap_name or n.endswith("/"):
+            continue
+        if "/uploads/" in n or n.startswith("uploads/"):
+            rel = n.split("uploads/", 1)[1] if "uploads/" in n else n
+            dest = (uploaded_root / rel).resolve()
+            if not dest.is_relative_to(uploaded_root.resolve()):
+                raise HTTPException(400, "Unsafe path inside zip")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(zf.read(n))
+            media_count += 1
+    imported, updated, skipped = memory.smart_import(snapshot)
+    return {"imported": imported, "updated": updated, "skipped": skipped,
+            "media_restored": media_count}
 
 
 class ImportInput(BaseModel):
@@ -445,6 +643,7 @@ def api_generate_narrative(data: dict):
         all_cards = [c for c in all_cards if c.get("source_date") and c["source_date"] >= date_start]
     if date_end:
         all_cards = [c for c in all_cards if c.get("source_date") and c["source_date"] <= date_end]
+    used_fallback = False
     if not all_cards:
         # Auto-fallback: find the most recent month that actually has cards
         recent = memory.list_cards()
@@ -453,6 +652,7 @@ def api_generate_narrative(data: dict):
                 (c.get("source_date") or "")[:7] for c in recent if c.get("source_date")
             )
             if best_month:
+                used_fallback = True
                 all_cards = [c for c in recent if (c.get("source_date") or "")[:7] == best_month]
                 date_start = best_month + "-01"
                 import calendar as _cal
@@ -477,7 +677,9 @@ def api_generate_narrative(data: dict):
             + "\n".join("- " + t for t in titles),
         }
     nid = memory.save_narrative(result["title"], result["body"], date_start, date_end, ai_used=ai_used)
-    return {"id": nid, "title": result["title"], "body": result["body"], "ai_used": ai_used, "ai_seconds": round(ai_seconds, 1)}
+    return {"id": nid, "title": result["title"], "body": result["body"], "ai_used": ai_used,
+            "ai_seconds": round(ai_seconds, 1), "date_start": date_start, "date_end": date_end,
+            "used_fallback": used_fallback}
 
 
 @app.delete("/api/narratives/{nid}")
@@ -487,6 +689,11 @@ def api_delete_narrative(nid: int):
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.get("/sw.js")
+def api_sw_js():
+    return FileResponse(STATIC_DIR / "sw.js", media_type="application/javascript")
 
 
 @app.get("/")
@@ -569,6 +776,7 @@ if __name__ == "__main__":
     import uvicorn
     ip = _lan_ip()
     cert = _ensure_cert(ip)
+    reload_mode = os.getenv("PRESENCE_RELOAD", "").lower() in ("1", "true", "yes")
     print("\n========================================")
     print("  电脑访问:  https://127.0.0.1:8001")
     if ip:
@@ -581,9 +789,8 @@ if __name__ == "__main__":
             port=8001,
             ssl_certfile=cert[0],
             ssl_keyfile=cert[1],
-            reload=True,
-            reload_dirs=["."],
+            reload=reload_mode,
         )
     else:
         print("[提示] 未检测到 cryptography，手机端暂时只能上传录音文件；安装后重启即可浏览器内录音。")
-        uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True, reload_dirs=["."])
+        uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=reload_mode)

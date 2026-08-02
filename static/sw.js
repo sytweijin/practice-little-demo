@@ -1,4 +1,4 @@
-﻿const CACHE = "presence-v13";
+﻿const CACHE = "presence-v16";
 const PRECACHE = [
   "/",
   "/static/index.html",
@@ -36,15 +36,11 @@ self.addEventListener("fetch", (e) => {
     );
     return;
   }
-  // Navigations: network first, fall back to the cached app shell
-  if (e.request.mode === "navigate") {
-    e.respondWith(
-      fetch(e.request).catch(() => caches.match("/"))
-    );
-    return;
-  }
 
   // ---- PWA Share Target ----
+  // MUST be checked before the navigate branch: a Share Target POST has
+  // request.mode === "navigate", so it would be swallowed by the generic
+  // navigation handler below and never reach this code.
   // When another app shares content to "presence", the browser POSTs to /share.
   // We extract the files/text, stash them in the SW cache, then redirect to the app.
   if (url.pathname === "/share" && e.request.method === "POST") {
@@ -82,8 +78,16 @@ self.addEventListener("fetch", (e) => {
       } catch (err) {
         console.warn("[SW] share target failed:", err);
       }
-      return Response.redirect("/?shared=1", 303);
-    })());
+     return Response.redirect("/?shared=1", 303);
+   })());
+   return;
+ }
+
+  // Navigations: network first, fall back to the cached app shell
+  if (e.request.mode === "navigate") {
+    e.respondWith(
+      fetch(e.request).catch(() => caches.match("/"))
+    );
     return;
   }
 

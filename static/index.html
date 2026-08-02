@@ -109,9 +109,11 @@
     <div class="tab-panel active" id="panel-capture">
       <div class="capture-layout">
         <div class="capture-left">
-                    <div class="capture-quick-toggle" style="margin-bottom:16px;display:flex;gap:8px;align-items:center">
+                    <div class="capture-quick-toggle" style="margin-bottom:16px;display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center">
             <span style="font-size:13px;font-weight:500;color:var(--ink-soft)">⚡ 快速模式</span>
             <span class="recall-toggle" id="quickModeToggle"><span class="recall-switch"></span><span>一键记录（跳过筛选）</span></span>
+            <span style="font-size:13px;font-weight:500;color:var(--ink-soft)">🔒 隐私模式</span>
+            <span class="recall-toggle privacy-toggle" id="privacyModeToggle" title="开启后素材只在本机处理，不调用云端 AI/ASR"><span class="recall-switch"></span><span>不调云端</span></span>
           </div>
           <div class="capture-step">
             <span class="step-num">1</span>
@@ -194,7 +196,7 @@
       </div>
       <div class="timeline-cards" id="timelineCards" style="margin-top:24px"></div>
       <div class="ledger-actions" style="margin-top:32px;display:flex;gap:12px;flex-wrap:wrap">
-        <button class="btn-primary" id="exportBtn" style="flex:0 0 auto;padding:10px 24px;width:auto">⬇ 导出全部卡片（JSON 备份）</button>
+        <button class="btn-primary" id="exportBtn" style="flex:0 0 auto;padding:10px 24px;width:auto">⬇ 完整备份（含素材）</button>
         <button class="btn-primary" id="importBtn" style="flex:0 0 auto;padding:10px 24px;width:auto;background:var(--teal);border-color:var(--teal)">⬆ 导入备份</button>
         <input type="file" id="importFileInput" accept=".json" style="display:none">
         <button class="btn-primary" id="manageTagsBtn" style="flex:0 0 auto;padding:10px 24px;width:auto;background:var(--ink);border-color:var(--ink)">🏷 标签管理</button>
@@ -213,7 +215,7 @@
       <div class="graph-head">
         <div>
           <div class="section-label">记忆星图</div>
-          <div class="graph-hint">金色线是共享标签的联结，青色线是 AI 发现的联结。拖拽旋转 · 滚轮缩放 · 点击星点看详情 · 点击青线锁定（绿色=已锁定）</div>
+          <div class="graph-hint">深粉色线是共享标签联结，悬停时变浅粉色；青色线是 AI 发现的联结。拖拽旋转 · 滚轮缩放 · 点击星点看详情 · 点击青线锁定（白色=已锁定）</div>
         </div>
         <div class="graph-search-box">
           <input class="graph-search-input" id="graphSearchInput" type="text" placeholder="搜索标题、标签、关键词…">

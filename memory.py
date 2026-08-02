@@ -2,7 +2,9 @@
 
 import sqlite3
 import json
+import re
 import contextvars
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -13,7 +15,11 @@ _profile_var = contextvars.ContextVar("presence_profile", default="default")
 
 
 def set_profile(name):
-    _profile_var.set((name or "default").strip() or "default")
+    name = (name or "default").strip() or "default"
+    # Reject path-traversal and filesystem-unsafe characters so a profile
+    # name like "../../x" can never escape the data directory.
+    name = re.sub(r"[^a-zA-Z0-9_\-\u4e00-\u9fff]", "_", name)
+    _profile_var.set(name)
 
 
 def current_profile():
@@ -28,7 +34,7 @@ def _db_path():
 
 
 def _connect():
-    conn = sqlite3.connect(str(_db_path()))
+    conn = sqlite3.connect(str(_db_path()), timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -92,7 +98,8 @@ def init_db():
         card_a INTEGER NOT NULL,
         card_b INTEGER NOT NULL,
         reason TEXT DEFAULT "",
-        created_at TEXT DEFAULT (datetime('now','localtime'))
+        created_at TEXT DEFAULT (datetime('now','localtime')),
+        locked INTEGER DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS narratives (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -110,6 +117,12 @@ def init_db():
         source_date TEXT,
         created_at TEXT DEFAULT (datetime('now','localtime')),
         sort_order INTEGER DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS custom_scenes (
+        key TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        accent TEXT DEFAULT '#525252',
+        created_at TEXT DEFAULT (datetime('now','localtime'))
     );
     """)
     conn.commit()
@@ -173,7 +186,7 @@ def _row_to_card(row):
 
 def list_cards(scene_type=None, date=None):
     conn = get_db()
-    q = "SELECT * FROM cards WHERE status != 'deleted'"
+    q = "SELECT * FROM cards WHERE status = 'confirmed'"
     params = []
     if scene_type:
         q += " AND scene_type = ?"
@@ -257,7 +270,20 @@ def update_card(card_id, data):
                 val = int(val)
             params.append(val)
     if not fields:
+        conn.close()
         return get_card(card_id)
+    # First-time recall enable: seed schedule at level 0 (+1 day) so the card
+    # is not instantly due. Without this next_recall stays NULL and
+    # recall_due() matches it on the very next poll.
+    if data.get("recall_enabled"):
+        row = conn.execute(
+            "SELECT recall_count, next_recall FROM cards WHERE id = ?", (card_id,)
+        ).fetchone()
+        if row and row["recall_count"] == 0 and not row["next_recall"]:
+            fields.append("recall_interval = ?")
+            fields.append("next_recall = ?")
+            params.append(0)
+            params.append(_next_recall_date(0))
     params.append(card_id)
     conn.execute(f"UPDATE cards SET {', '.join(fields)} WHERE id = ?", params)
     conn.commit()
@@ -298,11 +324,44 @@ def recall_due(scene_type=None):
     return [_row_to_card(r) for r in rows]
 
 
-def record_recall(card_id, difficulty, seconds=0):
-    """difficulty: 0=简单 1=中等 2=困难，影响下次间隔；seconds 记录本次回忆投入秒数。"""
+def _keyword_overlap(user_text, card):
+    """Compute the fraction of card keywords the user recalled.
+    Splits Chinese text into 2-char grams + Latin words, then measures
+    how many of the card key terms appear in the user attempt."""
+    if not user_text or not user_text.strip():
+        return None
+    reference = (card.get("title", "") + card.get("summary", "") +
+                 "".join(card.get("tags") or []))
+    if not reference.strip():
+        return None
+    def extract_keys(text):
+        keys = set()
+        # Chinese 2-char grams
+        cjk = re.findall(r"[一-鿿]+", text)
+        for seg in cjk:
+            for i in range(len(seg) - 1):
+                keys.add(seg[i:i+2])
+            if len(seg) == 1:
+                keys.add(seg)
+        # Latin words (len >= 3)
+        for w in re.findall(r"[a-zA-Z]{3,}", text):
+            keys.add(w.lower())
+        return keys
+    ref_keys = extract_keys(reference)
+    user_keys = extract_keys(user_text)
+    if not ref_keys:
+        return None
+    matched = ref_keys & user_keys
+    return round(len(matched) / len(ref_keys), 2)
+
+
+def record_recall(card_id, difficulty, seconds=0, user_text=""):
+    """difficulty: 0=简单 1=中等 2=困难，影响下次间隔；seconds 记录本次回忆投入秒数。
+    user_text: the user free-recall attempt, used to compute keyword overlap."""
     card = get_card(card_id)
     if not card:
         return None
+    match_rate = _keyword_overlap(user_text, card)
     interval = card["recall_interval"]
     if difficulty == 0:
         interval = min(interval + 2, len(RECALL_INTERVALS) - 1)
@@ -322,7 +381,10 @@ def record_recall(card_id, difficulty, seconds=0):
     )
     conn.commit()
     conn.close()
-    return get_card(card_id)
+    result = get_card(card_id)
+    if result is not None:
+        result["recall_match_rate"] = match_rate
+    return result
 
 
 # ---------- 批次/文件夹 ----------
@@ -335,14 +397,14 @@ def list_folders(include_unfiled=False):
     rows = conn.execute(
         """SELECT f.folder_id, f.name, f.scene_type, f.source_date, f.created_at,
                   (SELECT COUNT(*) FROM cards c
-                   WHERE c.batch_id = f.folder_id AND c.status != 'deleted') AS card_count
+                   WHERE c.batch_id = f.folder_id AND c.status = 'confirmed') AS card_count
            FROM folders f
            ORDER BY f.created_at DESC"""
     ).fetchall()
     result = []
     for r in rows:
         first = conn.execute(
-            "SELECT title FROM cards WHERE batch_id = ? AND status != 'deleted' ORDER BY id ASC LIMIT 1",
+            "SELECT title FROM cards WHERE batch_id = ? AND status = 'confirmed' ORDER BY id ASC LIMIT 1",
             (r["folder_id"],)
         ).fetchone()
         result.append({
@@ -359,7 +421,7 @@ def list_folders(include_unfiled=False):
     if include_unfiled:
         unfiled = conn.execute(
             """SELECT COUNT(*) AS c FROM cards
-               WHERE (batch_id IS NULL OR batch_id = '') AND status != 'deleted'"""
+               WHERE (batch_id IS NULL OR batch_id = '') AND status = 'confirmed'"""
         ).fetchone()["c"]
         result.append({
             "folder_id": "", "batch_id": "", "name": "", "scene_type": "custom",
@@ -402,7 +464,14 @@ def delete_folder(folder_id, delete_cards=False):
 
 def merge_folders(source_id, target_id):
     conn = get_db()
-    conn.execute("UPDATE cards SET batch_id = ? WHERE batch_id = ?", (target_id, source_id))
+    target = conn.execute(
+        "SELECT scene_type FROM folders WHERE folder_id = ?", (target_id,)
+    ).fetchone()
+    target_scene = target["scene_type"] if target else "custom"
+    conn.execute(
+        "UPDATE cards SET batch_id = ?, scene_type = ? WHERE batch_id = ?",
+        (target_id, target_scene, source_id),
+    )
     conn.execute("DELETE FROM folders WHERE folder_id = ?", (source_id,))
     conn.commit()
     conn.close()
@@ -410,12 +479,15 @@ def merge_folders(source_id, target_id):
 
 def batch_move_cards(card_ids, folder_id):
     """Move many cards into one folder (creates the folder if missing)."""
+    if not card_ids:
+        return
     conn = get_db()
+    target_scene = "custom"
     if folder_id:
-        exists = conn.execute(
-            "SELECT folder_id FROM folders WHERE folder_id = ?", (folder_id,)
+        row = conn.execute(
+            "SELECT scene_type FROM folders WHERE folder_id = ?", (folder_id,)
         ).fetchone()
-        if not exists:
+        if not row:
             first = conn.execute(
                 "SELECT scene_type, source_date FROM cards WHERE id IN (%s) ORDER BY id ASC LIMIT 1"
                 % ",".join("?" * len(card_ids)), card_ids
@@ -427,10 +499,13 @@ def batch_move_cards(card_ids, folder_id):
                     (folder_id, "", first["scene_type"], first["source_date"],
                      datetime.now().strftime("%Y-%m-%d %H:%M")),
                 )
+                target_scene = first["scene_type"]
+        else:
+            target_scene = row["scene_type"]
     placeholders = ",".join("?" * len(card_ids))
     conn.execute(
-        "UPDATE cards SET batch_id = ? WHERE id IN (%s)" % placeholders,
-        [folder_id] + list(card_ids),
+        "UPDATE cards SET batch_id = ?, scene_type = ? WHERE id IN (%s)" % placeholders,
+        [folder_id, target_scene] + list(card_ids),
     )
     conn.commit()
     conn.close()
@@ -452,9 +527,12 @@ def batch_delete_cards(card_ids):
 
 def move_card(card_id, folder_id):
     conn = get_db()
+    target_scene = "custom"
     if folder_id:
-        exists = conn.execute("SELECT folder_id FROM folders WHERE folder_id = ?", (folder_id,)).fetchone()
-        if not exists:
+        row = conn.execute(
+            "SELECT scene_type FROM folders WHERE folder_id = ?", (folder_id,)
+        ).fetchone()
+        if not row:
             card = conn.execute("SELECT scene_type, source_date FROM cards WHERE id = ?", (card_id,)).fetchone()
             if card:
                 conn.execute(
@@ -463,7 +541,13 @@ def move_card(card_id, folder_id):
                     (folder_id, "", card["scene_type"], card["source_date"],
                      datetime.now().strftime("%Y-%m-%d %H:%M")),
                 )
-    conn.execute("UPDATE cards SET batch_id = ? WHERE id = ?", (folder_id, card_id))
+                target_scene = card["scene_type"]
+        else:
+            target_scene = row["scene_type"]
+    conn.execute(
+        "UPDATE cards SET batch_id = ?, scene_type = ? WHERE id = ?",
+        (folder_id, target_scene, card_id),
+    )
     conn.commit()
     conn.close()
     return get_card(card_id)
@@ -473,21 +557,100 @@ def list_batches():
     """Back-compat alias for older callers."""
     return list_folders()
 
+
+# ---------- 自定义场景 ----------
+
+def _custom_scene_row(r):
+    return {
+        "key": r["key"],
+        "name": (r["name"] or "").strip() or "自定义",
+        "icon": "sparkles",
+        "accent": r["accent"] or "#525252",
+        "recall_enabled": False,
+        "focus_prompt": "用户自行判断哪些值得留存。AI 按通用标准筛选：信息密度、独特性、对用户的长远价值。",
+        "card_hint": "自由格式",
+        "minutes_per_material": 4,
+        "is_custom": True,
+    }
+
+
+def list_custom_scenes():
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT key, name, accent FROM custom_scenes ORDER BY created_at ASC, key ASC"
+    ).fetchall()
+    conn.close()
+    return [_custom_scene_row(r) for r in rows]
+
+
+def get_custom_scene(key):
+    conn = get_db()
+    r = conn.execute(
+        "SELECT key, name, accent FROM custom_scenes WHERE key = ?", (key,)
+    ).fetchone()
+    conn.close()
+    return _custom_scene_row(r) if r else None
+
+
+def create_custom_scene(name, accent=None):
+    key = "custom_" + uuid.uuid4().hex[:12]
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO custom_scenes (key, name, accent) VALUES (?,?,?)",
+        (key, (name or "").strip()[:40], accent or "#525252"),
+    )
+    conn.commit()
+    conn.close()
+    return get_custom_scene(key)
+
+
+def update_custom_scene(key, name=None, accent=None):
+    conn = get_db()
+    row = conn.execute("SELECT key FROM custom_scenes WHERE key = ?", (key,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    fields = []
+    params = []
+    if name is not None:
+        fields.append("name = ?")
+        params.append((name or "").strip()[:40])
+    if accent:
+        fields.append("accent = ?")
+        params.append(accent)
+    if fields:
+        params.append(key)
+        conn.execute(
+            "UPDATE custom_scenes SET %s WHERE key = ?" % ", ".join(fields), params
+        )
+    conn.commit()
+    conn.close()
+    return get_custom_scene(key)
+
+
+def delete_custom_scene(key):
+    conn = get_db()
+    conn.execute("UPDATE cards SET scene_type = 'custom' WHERE scene_type = ?", (key,))
+    conn.execute("UPDATE folders SET scene_type = 'custom' WHERE scene_type = ?", (key,))
+    conn.execute("DELETE FROM custom_scenes WHERE key = ?", (key,))
+    conn.commit()
+    conn.close()
+
 # ---------- 认知账单 ----------
 
 def ledger_stats():
     conn = get_db()
-    total_cards = conn.execute("SELECT COUNT(*) FROM cards WHERE status != 'deleted'").fetchone()[0]
+    total_cards = conn.execute("SELECT COUNT(*) FROM cards WHERE status = 'confirmed'").fetchone()[0]
     by_scene = conn.execute(
-        "SELECT scene_type, COUNT(*) as c FROM cards WHERE status != 'deleted' GROUP BY scene_type"
+        "SELECT scene_type, COUNT(*) as c FROM cards WHERE status = 'confirmed' GROUP BY scene_type"
     ).fetchall()
     total_minutes = conn.execute("SELECT COALESCE(SUM(minutes_saved),0) FROM ledger").fetchone()[0]
     total_materials = conn.execute("SELECT COALESCE(SUM(materials_count),0) FROM ledger").fetchone()[0]
     recall_total = conn.execute(
-        "SELECT COUNT(*) FROM cards WHERE recall_enabled = 1 AND status != 'deleted'"
+        "SELECT COUNT(*) FROM cards WHERE recall_enabled = 1 AND status = 'confirmed'"
     ).fetchone()[0]
     recall_done = conn.execute(
-        "SELECT COUNT(*) FROM cards WHERE recall_enabled = 1 AND recall_count > 0"
+        "SELECT COUNT(*) FROM cards WHERE recall_enabled = 1 AND recall_count > 0 AND status = 'confirmed'"
     ).fetchone()[0]
     today = datetime.now().strftime("%Y-%m-%d")
     due = conn.execute(
@@ -498,8 +661,8 @@ def ledger_stats():
     quick_mode_count = conn.execute("SELECT COUNT(*) FROM ledger WHERE quick_mode = 1").fetchone()[0]
     deep_mode_count = conn.execute("SELECT COUNT(*) FROM ledger WHERE quick_mode = 0").fetchone()[0]
     total_recall_seconds = conn.execute("SELECT COALESCE(SUM(recall_seconds),0) FROM cards").fetchone()[0]
-    recall_sessions = conn.execute("SELECT COUNT(*) FROM cards WHERE recall_count > 0").fetchone()[0]
-    avg_difficulty = conn.execute("SELECT COALESCE(AVG(difficulty),0) FROM cards WHERE difficulty > 0").fetchone()[0]
+    recall_sessions = conn.execute("SELECT COUNT(*) FROM cards WHERE recall_count > 0 AND status = 'confirmed'").fetchone()[0]
+    avg_difficulty = conn.execute("SELECT COALESCE(AVG(difficulty),0) FROM cards WHERE difficulty > 0 AND status = 'confirmed'").fetchone()[0]
     conn.close()
     return {
         "total_cards": total_cards,
@@ -544,7 +707,7 @@ def card_connections(card_id, limit=6):
         return []
     conn = get_db()
     rows = conn.execute(
-        "SELECT * FROM cards WHERE status != 'deleted' AND id != ? ORDER BY created_at DESC",
+        "SELECT * FROM cards WHERE status = 'confirmed' AND id != ? ORDER BY created_at DESC",
         (card_id,),
     ).fetchall()
     result = []
@@ -557,7 +720,7 @@ def card_connections(card_id, limit=6):
             result.append(card)
     conn.close()
     # rank by number of shared tags, then recency
-    result.sort(key=lambda c: (-len(c["shared_tags"]), c["created_at"]), reverse=False)
+    result.sort(key=lambda c: (len(c["shared_tags"]), c["created_at"]), reverse=True)
     # Merge AI-discovered connections
     ai_conns = get_ai_connections(card_id)
     seen = {c["id"] for c in result}
@@ -579,10 +742,11 @@ def search_cards(query, scene_type=None):
     conditions = []
     params = []
     for term in terms:
-        like = "%%" + term + "%%"
-        conditions.append("(title LIKE ? OR summary LIKE ? OR personal LIKE ? OR tags LIKE ? OR source_ref LIKE ?)")
+        escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = "%" + escaped + "%"
+        conditions.append("(title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR personal LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR source_ref LIKE ? ESCAPE '\\')")
         params.extend([like, like, like, like, like])
-    sql = "SELECT * FROM cards WHERE status != 'deleted' AND " + " AND ".join(conditions)
+    sql = "SELECT * FROM cards WHERE status = 'confirmed' AND " + " AND ".join(conditions)
     if scene_type:
         sql += " AND scene_type = ?"
         params.append(scene_type)
@@ -594,10 +758,11 @@ def search_cards(query, scene_type=None):
 
 # ========== 导出 / 导入 ==========
 
-def export_cards_data():
-    u"""Return all non-deleted cards as a list of dicts (for JSON export)."""
+def export_cards_data(include_drafts=False):
+    u"""Return cards as dicts. Confirmed only by default; full snapshots may include drafts."""
     conn = get_db()
-    rows = conn.execute("SELECT * FROM cards WHERE status != 'deleted' ORDER BY created_at DESC").fetchall()
+    cond = "status != 'deleted'" if include_drafts else "status = 'confirmed'"
+    rows = conn.execute("SELECT * FROM cards WHERE " + cond + " ORDER BY created_at DESC").fetchall()
     conn.close()
     return [_row_to_card(r) for r in rows]
 
@@ -664,7 +829,7 @@ def list_profiles():
         token = _profile_var.set(name)
         conn = _connect()
         try:
-            total = conn.execute("SELECT COUNT(*) FROM cards WHERE status != 'deleted'").fetchone()[0]
+            total = conn.execute("SELECT COUNT(*) FROM cards WHERE status = 'confirmed'").fetchone()[0]
         except Exception:
             total = 0
         conn.close()
@@ -678,7 +843,7 @@ def graph_data(limit=200):
     conn = get_db()
     rows = conn.execute(
         "SELECT id, title, scene_type, tags, source_date FROM cards "
-        "WHERE status != 'deleted' ORDER BY created_at DESC LIMIT ?",
+        "WHERE status = 'confirmed' ORDER BY created_at DESC LIMIT ?",
         (limit,),
     ).fetchall()
     conn.close()
@@ -726,7 +891,7 @@ def list_all_tags():
     u"""Return all unique tags with card count, sorted by count desc."""
     conn = get_db()
     rows = conn.execute(
-        "SELECT tags FROM cards WHERE status != 'deleted' AND tags != '[]'"
+        "SELECT tags FROM cards WHERE status = 'confirmed' AND tags != '[]'"
     ).fetchall()
     tag_counts = {}
     for r in rows:
@@ -743,7 +908,7 @@ def rename_tag(old_tag, new_tag):
     u"""Rename a tag in all cards. new_tag='' removes the tag."""
     conn = get_db()
     rows = conn.execute(
-        "SELECT id, tags FROM cards WHERE status != 'deleted' AND tags LIKE ?",
+        "SELECT id, tags FROM cards WHERE status = 'confirmed' AND tags LIKE ?",
         ("%%" + old_tag + "%%",),
     ).fetchall()
     updated = 0
@@ -943,16 +1108,29 @@ def delete_narrative(nid):
 def export_full_snapshot():
     """Export ALL data: cards, narratives, ai_connections.
     This is a true backup — nothing is lost on restore."""
-    cards = export_cards_data()
+    cards = export_cards_data(include_drafts=True)
     narratives = list_narratives()
     ai_conns = all_ai_connections()
+    folders = list_folders_data()
     return {
         "version": 2,
         "exported_at": datetime.now().isoformat(),
         "cards": cards,
         "narratives": narratives,
         "ai_connections": ai_conns,
+        "folders": folders,
     }
+
+
+def list_folders_data():
+    """Raw folder rows for export (excludes the virtual unfiled group)."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT folder_id, name, scene_type, source_date, created_at "
+        "FROM folders ORDER BY created_at DESC"
+    ).fetchall()
+    conn.close()
+    return [{"folder_id": r["folder_id"], "name": r["name"] or "", "scene_type": r["scene_type"], "source_date": r["source_date"], "created_at": r["created_at"]} for r in rows]
 
 
 def smart_import(snapshot):
@@ -970,13 +1148,17 @@ def smart_import(snapshot):
         title = cd.get("title", "")
         source_date = cd.get("source_date", "")
         existing = conn.execute(
-            "SELECT id, created_at FROM cards WHERE title = ? AND source_date = ? AND status != 'deleted'",
+            "SELECT id, created_at, status FROM cards WHERE title = ? AND source_date = ? AND status != 'deleted'",
             (title, source_date),
         ).fetchone()
         if existing:
             # Card exists — update only if incoming has newer or equal created_at
             # and preserve the newer recall progress
             in_created = cd.get("created_at") or ""
+            in_status = cd.get("status", "confirmed")
+            # A confirmed card must never be downgraded by an older draft snapshot.
+            if in_status != "confirmed" and existing["status"] == "confirmed":
+                in_status = "confirmed"
             if in_created and in_created >= (existing["created_at"] or ""):
                 # Smart merge: take the higher recall_count (more progress = keep)
                 conn.execute(
@@ -988,7 +1170,7 @@ def smart_import(snapshot):
                        WHERE id=?""",
                     (cd.get("summary", ""), cd.get("personal", ""),
                      json.dumps(cd.get("tags", []), ensure_ascii=False),
-                     cd.get("image_url", ""), cd.get("status", "confirmed"),
+                     cd.get("image_url", ""), in_status,
                      int(cd.get("recall_enabled", False)), cd.get("batch_id", ""),
                      cd.get("last_recalled"), cd.get("recall_count", 0),
                      cd.get("next_recall"), cd.get("recall_interval", 1),
@@ -1035,18 +1217,43 @@ def smart_import(snapshot):
                  narr.get("created_at")),
             )
 
-    # Import AI connections (skip exact duplicates)
+    # Import folders (upsert by folder_id, keep user-chosen names)
+    for fd in snapshot.get("folders", []):
+        fid = fd.get("folder_id")
+        if not fid:
+            continue
+        exists = conn.execute(
+            "SELECT folder_id FROM folders WHERE folder_id = ?", (fid,)
+        ).fetchone()
+        if exists:
+            incoming = (fd.get("name") or "").strip()
+            if incoming:
+                conn.execute(
+                    "UPDATE folders SET name = ? WHERE folder_id = ?", (incoming, fid)
+                )
+        else:
+            conn.execute(
+                """INSERT INTO folders (folder_id, name, scene_type, source_date, created_at)
+                   VALUES (?,?,?,?,?)""",
+                (fid, fd.get("name", ""), fd.get("scene_type", "custom"),
+                 fd.get("source_date"), fd.get("created_at")),
+            )
+
+    # Import AI connections (order-normalised so (a,b)==(b,a))
     for ac in snapshot.get("ai_connections", []):
-        a, b = ac.get("a"), ac.get("b")
+        a, b = int(ac.get("a", 0)), int(ac.get("b", 0))
+        if not a or not b or a == b:
+            continue
+        lo, hi = min(a, b), max(a, b)
         reason = ac.get("reason", "")
         exists = conn.execute(
             "SELECT id FROM ai_connections WHERE card_a=? AND card_b=? AND reason=?",
-            (a, b, reason),
+            (lo, hi, reason),
         ).fetchone()
         if not exists:
             conn.execute(
                 "INSERT INTO ai_connections (card_a, card_b, reason) VALUES (?,?,?)",
-                (a, b, reason),
+                (lo, hi, reason),
             )
 
     conn.commit()
