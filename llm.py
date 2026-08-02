@@ -53,7 +53,11 @@ def _transcribe_audio(audio_url):
         return ""
     try:
         if _has_dashscope_key():
-            return _dashscope_asr(full, audio_url)
+            result = _dashscope_asr(full, audio_url)
+            if result.startswith("__ASR_FAILED__:"):
+                reason = result.split(":", 1)[1]
+                raise RuntimeError("ASR: " + reason)
+            return result
         # Real OpenAI (or truly OpenAI-compatible provider)
         base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
         with full.open("rb") as fh:
@@ -63,6 +67,8 @@ def _transcribe_audio(audio_url):
                 files=files, data={"model": "whisper-1"}, timeout=120)
             r.raise_for_status()
             return str(r.json().get("text", "")).strip()
+    except RuntimeError:
+        raise  # let ASR-specific errors (no speech etc.) reach the caller
     except Exception as e:
         print("[ASR] transcription failed for " + audio_url + ": " + str(e))
     return ""
@@ -109,8 +115,12 @@ def _dashscope_asr(full, audio_url):
             transcripts = rj.get("transcripts", [])
             return str(transcripts[0].get("text", "")).strip() if transcripts else ""
         if st == "FAILED":
-            print("[ASR] DashScope task FAILED for " + audio_url)
-            return ""
+            code = pr.json().get("output", {}).get("code", "FAILED")
+            # SUCCESS_WITH_NO_VALID_FRAGMENT = processed OK but no speech detected
+            reason = ("no_valid_fragment" if "NO_VALID_FRAGMENT" in code
+                      else code.lower())
+            print("[ASR] DashScope task FAILED for " + audio_url + ": " + code)
+            return "__ASR_FAILED__:" + reason
     print("[ASR] DashScope task timed out for " + audio_url)
     return ""
 def _build_prompt(scene_key, personalization):
@@ -237,10 +247,16 @@ def analyze_materials(materials, scene_key, personalization=""):
 
     # Transcribe audio/video so their content reaches the LLM text channel
     audio_texts = []
+    asr_error = None  # detail when ASR fails (e.g. no speech detected)
     for m in materials:
         kind = m.get("kind", "")
         if kind in ("audio", "video") and m.get("url"):
-            transcript = _transcribe_audio(m["url"])
+            try:
+                transcript = _transcribe_audio(m["url"])
+            except RuntimeError as re:
+                transcript = ""
+                if asr_error is None:
+                    asr_error = str(re)
             if transcript:
                 label = "\u89c6\u9891\u8f6c\u5199" if kind == "video" else "\u8bed\u97f3\u8f6c\u5199"
                 audio_texts.append("[" + label + "] " + transcript)
@@ -270,7 +286,12 @@ def analyze_materials(materials, scene_key, personalization=""):
             if _has_dashscope_key() or _has_openai_key():
                 has_av = any(m.get("kind") in ("audio", "video") for m in card_materials)
                 if has_av and not text_content and not vision_paths:
-                    ai_error = "录音/视频转写失败，AI 无内容可分析（请检查音频是否包含语音）"
+                    if asr_error and "no_valid_fragment" in asr_error:
+                        ai_error = "录音未检测到语音内容（可能太短或没有说话），AI 无内容可分析"
+                    elif asr_error:
+                        ai_error = "录音/视频转写失败：" + asr_error[:150]
+                    else:
+                        ai_error = "录音/视频转写失败，AI 无内容可分析（请检查音频是否包含语音）"
             cards = _fallback_generate(card_materials, scene_key, personalization)
     except Exception as e:
         # Only attribute the failure to "no key" when a key is genuinely absent.
