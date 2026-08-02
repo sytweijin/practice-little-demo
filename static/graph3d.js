@@ -245,7 +245,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     });
 
     // ---- Connection lines ----
-    // Shared-tag links: cards with matching tags get connected (gold)
+    // Shared-tag links: cards with matching tags get connected (near-white)
     var sharedLP = [];
     var seenPairs = {};
     var tagToCards = {};
@@ -276,7 +276,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
       var sg = new THREE.BufferGeometry();
       sg.setAttribute('position', new THREE.Float32BufferAttribute(sharedLP, 3));
       scene.add(new THREE.LineSegments(sg, new THREE.LineBasicMaterial({
-        color: 0xfbbf24, transparent: true, opacity: 0.35,
+        color: 0x4ade80, transparent: true, opacity: 0.28,
         blending: THREE.AdditiveBlending, depthWrite: false
       })));
     }
@@ -325,7 +325,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
             a._p.x, a._p.y, a._p.z, b._p.x, b._p.y, b._p.z
           ], 3));
           var lm = new THREE.LineBasicMaterial({
-            color: 0xfbbf24, transparent: true, opacity: 0,
+            color: 0x4ade80, transparent: true, opacity: 0,
             blending: THREE.AdditiveBlending, depthWrite: false
           });
           var line = new THREE.Line(lg, lm);
@@ -451,7 +451,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         state.hovLine = nl;
         if (nl) {
           nl.material.opacity = 0.9;
-          nl.material.color.setHex(0xfff3c4);
+          nl.material.color.setHex(0x86efac);
           renderer.domElement.style.cursor = 'pointer';
         }
       }
@@ -522,7 +522,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         tip.style.display = 'block';
         tip.style.left = Math.min(pp.x + 18, renderer.domElement.clientWidth - 200) + 'px';
         tip.style.top = Math.max(pp.y - 20, 0) + 'px';
-        tip.innerHTML = '<div style="font-weight:600;color:#fbbf24">#' + escH(state.hovLine.userData.tag) + '</div>' +
+        tip.innerHTML = '<div style="font-weight:600;color:#4ade80">#' + escH(state.hovLine.userData.tag) + '</div>' +
           '<div style="font-size:11px;color:#94a3b8;margin-top:2px">\u5171\u4eab\u6807\u7b7e\u8054\u7ed3</div>';
       } else if (state.hovAiLine) {
         var am = state.hovAiLine.userData.pa.clone().lerp(state.hovAiLine.userData.pb, 0.5);

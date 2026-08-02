@@ -27,7 +27,7 @@ tg.querySelectorAll('.timeline-day[data-date]').forEach(function(el){el.onclick=
 var dc=(typeof cards!=='undefined'?cards:[]).filter(function(c){return c.source_date===el.dataset.date&&c.status!=='deleted'});
 if(!dc.length){tc.innerHTML="<div style='text-align:center;padding:30px;color:var(--ink-faint)'>"+el.dataset.date+'没有记忆卡片</div>';return}
 tc.innerHTML="<h3 style='font-family:var(--serif);font-size:1.1rem;margin-bottom:16px'>"+el.dataset.date+'·'+dc.length+'张卡片</h3><div class=card-grid>'+dc.map(function(c){return cardHtml(c)}).join('')+'</div>';if(typeof bindCardEvents==='function')bindCardEvents(tc)}})}
-window.rt=rt;if(tp)tp.onclick=function(){td.setMonth(td.getMonth()-1);rt()};if(tn)tn.onclick=function(){td.setMonth(td.getMonth()+1);rt()}
+window.rt=rt;if(tp)tp.onclick=function(){td.setMonth(td.getMonth()-1);rt();loadNarrative()};if(tn)tn.onclick=function(){td.setMonth(td.getMonth()+1);rt();loadNarrative()}
 
 var eb=document.getElementById('exportBtn'),ib=document.getElementById('importBtn'),ii=document.getElementById('importFileInput'),mtb=document.getElementById('manageTagsBtn');
 if(eb)eb.onclick=function(){eb.textContent='⏳准备中...';eb.disabled=true;fetch('/api/export?format=json&full=true').then(function(r){return r.json()}).then(function(d){
@@ -67,6 +67,24 @@ var vFiles=selectedFiles.filter(function(f){return f.type.startsWith('video/')})
 var proceed=function(){for(var x=0;x<sendFiles.length;x++)fd.append('files',sendFiles[x]);for(var x=0;x<frameFiles.length;x++)fd.append('video_frames',frameFiles[x]);fetch('/api/analyze',{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(d){return Promise.all((d.cards||[]).map(function(c){return fetch('/api/cards/'+c.id+'/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})})).then(function(){alert('快速记录完成！已自动保存'+(d.cards||[]).length+'张卡片');selectedFiles=[];renderFileList();document.getElementById('notesInput').value='';document.getElementById('personalizationInput').value='';if(typeof loadCards==='function')loadCards();if(typeof loadLedger==='function')loadLedger();if(typeof loadRecall==='function')loadRecall()})}).catch(function(e){alert('记录失败：'+e.message)}).finally(function(){ab.disabled=false;ab.textContent='生成记忆卡片→'})};
 if(vFiles.length){Promise.all(vFiles.map(function(vf){return extractVideoFrames(vf,3)})).then(function(all){all.forEach(function(fr){frameFiles=frameFiles.concat(fr)});proceed()}).catch(function(){proceed()})}else{proceed()}}else if(ac)ac()}}
 var gnBtn=document.getElementById('genNarrativeBtn'),nrEl=document.getElementById('narrativeResult');
+function renderNarrative(res){
+  if(!nrEl||!res){if(nrEl)nrEl.innerHTML='';return}
+  var ai=res.ai_used?'<span style="font-size:11px;color:var(--amber);margin-left:8px">✨AI生成</span>':'<span style="font-size:11px;color:var(--ink-faint);margin-left:8px">占位</span>';
+  nrEl.innerHTML='<div style="font-family:var(--serif);font-size:1.2rem;font-weight:600;margin-bottom:12px">'+esc(res.title)+ai+'</div><div style="white-space:pre-wrap;line-height:1.8;color:var(--ink-soft);font-size:14px">'+esc(res.body)+'</div><div style="margin-top:12px"><button class="btn-primary" id="narrDelBtn" style="width:auto;padding:6px 16px;background:var(--bg-card);color:var(--ink-faint);border:1px solid var(--line);font-size:12px">删除</button></div>';
+  var db=document.getElementById('narrDelBtn');if(db)db.onclick=function(){if(!confirm('确认删除这篇回顾？删除后需要重新生成。'))return;fetch('/api/narratives/'+res.id,{method:'DELETE'}).then(function(){nrEl.innerHTML='';alert('已删除')})}      
+}
+function loadNarrative(){
+  if(!nrEl)return;
+  var ny=td.getFullYear(),nm=td.getMonth();
+  var ms=ny+'-'+String(nm+1).padStart(2,'0');
+  fetch('/api/narratives').then(function(r){return r.json()}).then(function(d){
+    var found=null;
+    (d.narratives||[]).forEach(function(n){
+      if(n.date_start&&n.date_start.slice(0,7)===ms)found=n;
+    });
+    if(found)renderNarrative(found);else nrEl.innerHTML='';
+  }).catch(function(){});
+}
 if(gnBtn){gnBtn.onclick=function(){
   var ny=td.getFullYear(),nm=td.getMonth();
   var ms=ny+'-'+String(nm+1).padStart(2,'0');
@@ -76,10 +94,9 @@ if(gnBtn){gnBtn.onclick=function(){
   fetch('/api/narrative/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date_start:ms+'-01',date_end:ms+'-31',fallback_label:monthLabel})}).then(function(r){
   if(!r.ok){return r.json().then(function(e){throw new Error(e.detail||('错误 '+r.status))}).catch(function(){throw new Error(ms+'没有记忆卡片，试试切换到有卡片的月份')})}
   return r.json()}).then(function(res){
-    if(nrEl){var ai=res.ai_used?'<span style="font-size:11px;color:var(--amber);margin-left:8px">✨AI生成</span>':'<span style="font-size:11px;color:var(--ink-faint);margin-left:8px">占位</span>';
-    nrEl.innerHTML='<div style="font-family:var(--serif);font-size:1.2rem;font-weight:600;margin-bottom:12px">'+esc(res.title)+ai+'</div><div style="white-space:pre-wrap;line-height:1.8;color:var(--ink-soft);font-size:14px">'+esc(res.body)+'</div><div style="margin-top:12px"><button class="btn-primary" id="narrDelBtn" style="width:auto;padding:6px 16px;background:var(--bg-card);color:var(--ink-faint);border:1px solid var(--line);font-size:12px">删除</button></div>';
-    var db=document.getElementById('narrDelBtn');if(db)db.onclick=function(){fetch('/api/narratives/'+res.id,{method:'DELETE'}).then(function(){nrEl.innerHTML='';alert('已删除')})}}
+    if(nrEl)renderNarrative(res)
   }).catch(function(e){alert('生成失败：'+e.message)}).finally(function(){gnBtn.disabled=false;gnBtn.textContent='✨ 生成本月回顾'})
 }};
 
+if(nrEl)loadNarrative();
 }if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init)}else{init()}})();
