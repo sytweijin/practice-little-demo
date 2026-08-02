@@ -40,8 +40,10 @@ def save_upload(filename, content_bytes):
 
 
 def _transcribe_audio(audio_url):
-    """Transcribe audio via the OpenAI-compatible /audio/transcriptions endpoint.
-    Works with DashScope compatible mode (paraformer-v2) and real OpenAI (whisper-1).
+    """Transcribe audio/video so its content reaches the LLM text channel.
+    DashScope: native async ASR (submit + poll) because the OpenAI-compatible
+    /audio/transcriptions endpoint returns 404 on DashScope.
+    OpenAI: standard /audio/transcriptions (whisper-1).
     Returns empty string when no key is configured or the call fails."""
     full = Path(__file__).parent / audio_url.lstrip("/")
     if not full.exists():
@@ -49,24 +51,67 @@ def _transcribe_audio(audio_url):
     api_key = os.getenv("DASHSCOPE_API_KEY") or os.getenv("OPENAI_API_KEY")
     if not api_key:
         return ""
-    if _has_dashscope_key():
-        base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        model = os.getenv("DASHSCOPE_ASR_MODEL", "paraformer-v2")
-    else:
-        base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-        model = "whisper-1"
     try:
+        if _has_dashscope_key():
+            return _dashscope_asr(full, audio_url)
+        # Real OpenAI (or truly OpenAI-compatible provider)
+        base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
         with full.open("rb") as fh:
             files = {"file": (full.name, fh, "application/octet-stream")}
-            r = httpx.post(
-                base_url + "/audio/transcriptions",
+            r = httpx.post(base_url + "/audio/transcriptions",
                 headers={"Authorization": "Bearer " + api_key},
-                files=files, data={"model": model}, timeout=120,
-            )
-        r.raise_for_status()
-        return str(r.json().get("text", "")).strip()
+                files=files, data={"model": "whisper-1"}, timeout=120)
+            r.raise_for_status()
+            return str(r.json().get("text", "")).strip()
     except Exception as e:
         print("[ASR] transcription failed for " + audio_url + ": " + str(e))
+    return ""
+
+
+def _dashscope_asr(full, audio_url):
+    """DashScope native async recording-file ASR.
+    The OpenAI-compatible /audio/transcriptions returns 404 on DashScope, so we
+    use the native submit+poll flow: POST .../audio/asr/transcription with a
+    base64 data URI, then GET .../tasks/{id} until done, then fetch the result
+    JSON whose transcripts[0].text holds the transcript."""
+    api_key = os.getenv("DASHSCOPE_API_KEY")
+    model = os.getenv("DASHSCOPE_ASR_MODEL", "paraformer-v2")
+    b64 = base64.b64encode(full.read_bytes()).decode()
+    ext = full.suffix.lower()
+    mime = "audio/webm" if ext in (".webm", ".weba") else (
+        "audio/mp4" if ext == ".m4a" else ("audio/" + ext.lstrip(".")))
+    file_url = "data:" + mime + ";base64," + b64
+    sub = httpx.post(
+        "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription",
+        headers={"Authorization": "Bearer " + api_key, "X-DashScope-Async": "enable"},
+        json={"model": model, "input": {"file_urls": [file_url]},
+              "parameters": {"language_hints": ["zh", "en"]}},
+        timeout=60,
+    )
+    sub.raise_for_status()
+    task_id = sub.json().get("output", {}).get("task_id")
+    if not task_id:
+        return ""
+    for _ in range(30):
+        time.sleep(2)
+        pr = httpx.get("https://dashscope.aliyuncs.com/api/v1/tasks/" + task_id,
+                       headers={"Authorization": "Bearer " + api_key}, timeout=30)
+        pr.raise_for_status()
+        st = pr.json().get("output", {}).get("task_status")
+        if st == "SUCCEEDED":
+            results = pr.json()["output"].get("results", [])
+            if not results:
+                return ""
+            turl = results[0].get("transcription_url")
+            if not turl:
+                return ""
+            rj = httpx.get(turl, timeout=30).json()
+            transcripts = rj.get("transcripts", [])
+            return str(transcripts[0].get("text", "")).strip() if transcripts else ""
+        if st == "FAILED":
+            print("[ASR] DashScope task FAILED for " + audio_url)
+            return ""
+    print("[ASR] DashScope task timed out for " + audio_url)
     return ""
 def _build_prompt(scene_key, personalization):
     scenario = get_scenario(scene_key)
@@ -220,6 +265,12 @@ def analyze_materials(materials, scene_key, personalization=""):
             cards = _call_text_llm_for_cards(text_content, scene_key, personalization)
             ai_used = True
         else:
+            # Key is configured but there is nothing to analyze (e.g. audio whose
+            # ASR failed). Surface this instead of disguising it as "未接入 AI".
+            if _has_dashscope_key() or _has_openai_key():
+                has_av = any(m.get("kind") in ("audio", "video") for m in card_materials)
+                if has_av and not text_content and not vision_paths:
+                    ai_error = "录音/视频转写失败，AI 无内容可分析（请检查音频是否包含语音）"
             cards = _fallback_generate(card_materials, scene_key, personalization)
     except Exception as e:
         # Only attribute the failure to "no key" when a key is genuinely absent.

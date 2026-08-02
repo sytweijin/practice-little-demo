@@ -1,9 +1,3 @@
-# CHANGELOG
-
-本文件记录"在场 — AI 记忆工坊"的重要变更。格式遵循团队约定：每条记录包含问题 / 修改前 / 修改后 / 为什么这样改 / 收益，按优先级分组。
-
----
-
 ## v1.0 -- 修复 AI 拆解失败：视觉调用超时 + 真实错误暴露（2026-08-02）
 
 **定位：** 上传照片/视频后一律报"AI 拆解失败"。根因是视觉调用超时（60s 对推理模型不够）+ 调用失败被静默吞掉后前端误报"未接入 AI"，导致无法定位真实原因。本次彻底修复并让失败原因如实暴露。
@@ -90,9 +84,75 @@ function renderDraftCards(drafts, minutes, aiSeconds, aiUsed, aiError) {
 - 失败原因直接显示在卡片区，无需查服务器日志即可定位
 - 不再把真实调用错误误导成"未配置"
 
+#### 3. 录音转写端点 404，ASR 从未成功 → 纯录音显示"未接入 AI"
+
+**问题：** `_transcribe_audio` 调用的是 DashScope 兼容模式 `/audio/transcriptions` 端点，但该端点在 DashScope 上返回 404（content-length: 0）——DashScope 的 OpenAI 兼容模式根本不提供语音转写。因此所有录音（及带音轨的视频）的 ASR 始终失败，转写文本为空。纯录音上传时既无图片又无文本，走到占位卡片分支，前端显示"未接入 AI，配置 API Key 后可启用"——而 Key 实际已正确配置。
+
+**修改前：**
+```python
+# llm.py — 调用不存在的兼容端点（DashScope 返回 404）
+if _has_dashscope_key():
+    base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    model = os.getenv("DASHSCOPE_ASR_MODEL", "paraformer-v2")
+r = httpx.post(base_url + "/audio/transcriptions",
+    headers={"Authorization": "Bearer " + api_key},
+    files=files, data={"model": model}, timeout=120)
+```
+
+**修改后：**
+```python
+# llm.py — 改用 DashScope 原生异步录音文件识别（提交 + 轮询）
+def _dashscope_asr(full, audio_url):
+    b64 = base64.b64encode(full.read_bytes()).decode()
+    file_url = "data:" + mime + ";base64," + b64
+    sub = httpx.post(
+        "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription",
+        headers={"Authorization": "Bearer " + api_key, "X-DashScope-Async": "enable"},
+        json={"model": model, "input": {"file_urls": [file_url]}, ...}, timeout=60)
+    task_id = sub.json()["output"]["task_id"]
+    for _ in range(30):
+        pr = httpx.get(".../tasks/" + task_id, ...)
+        if pr.json()["output"]["task_status"] == "SUCCEEDED":
+            turl = pr.json()["output"]["results"][0]["transcription_url"]
+            return httpx.get(turl).json()["transcripts"][0]["text"]
+```
+
+**为什么这样改：** DashScope 的语音识别只提供原生异步接口（`/api/v1/services/audio/asr/transcription`），不支持 OpenAI 兼容的同步 `/audio/transcriptions`。原生接口需提交任务拿 task_id、轮询状态、再抓取结果 JSON 中的 `transcripts[0].text`。base64 data URI 作为 `file_urls` 直接内联音频，免去 OSS 上传。实测 webm 格式可正常转写，短录音约 5 秒完成。
+
+**收益：**
+- 录音上传后 AI 正常理解内容（实测转写《春江花月夜》并生成对应卡片）
+- 带音轨的视频也获得语音转写，画面（帧）+ 声音（转写）双通道进入 AI
+- 不再把"转写失败"误报为"未接入 AI"
+
+#### 4. 有 Key 但无可分析内容时仍误报"未接入 AI"
+
+**问题：** 当 Key 已配置但素材无可分析内容（如录音 ASR 失败导致文本为空、且无图片）时，代码走到 `else` 占位分支，`ai_used=False` 且 `ai_error=None`，前端显示"未接入 AI"——与真正未配置 Key 无法区分。
+
+**修改前：**
+```python
+# llm.py — else 分支不区分"无 Key"与"有 Key 但无内容"
+else:
+    cards = _fallback_generate(card_materials, scene_key, personalization)
+```
+
+**修改后：**
+```python
+# llm.py — 有 Key 且全是音视频但转写为空时，暴露转写失败
+else:
+    if _has_dashscope_key() or _has_openai_key():
+        has_av = any(m.get("kind") in ("audio", "video") for m in card_materials)
+        if has_av and not text_content and not vision_paths:
+            ai_error = "录音/视频转写失败，AI 无内容可分析（请检查音频是否包含语音）"
+    cards = _fallback_generate(card_materials, scene_key, personalization)
+```
+
+**为什么这样改：** "未接入 AI"（需配置 Key）与"转写失败"（需检查音频）是完全不同的两类问题，必须区分以便用户排查。
+
+**收益：**
+- 转写失败时提示明确，不再误导用户去检查其实已正确的 Key 配置
 ### P1（健壮性提升）
 
-#### 3. load_dotenv 不 override，进程残留空 Key 覆盖 .env
+#### 5. load_dotenv 不 override，进程残留空 Key 覆盖 .env
 
 **问题：** `load_dotenv()` 默认不覆盖进程已有环境变量。若启动 shell 中残留空的 `DASHSCOPE_API_KEY`（或从污染的环境继承），.env 中的正确值无法生效，服务器进程实际拿到空 Key，于是 `_has_dashscope_key()` 返回 False，直接走占位卡片——表现为"明明配了 Key 却不调用 AI"。
 
@@ -113,7 +173,7 @@ load_dotenv(override=True)
 **收益：**
 - 修正 .env 后重启即可生效，不再受进程残留环境干扰
 
-#### 4. 视频抽帧用全分辨率，放大超时与带宽风险
+#### 6. 视频抽帧用全分辨率，放大超时与带宽风险
 
 **问题：** 浏览器抽帧时 `canvas` 直接设为 `video.videoWidth × video.videoHeight`，手机视频常为 1080p/4K。全分辨率帧体积大、视觉 API 处理慢，是视频路径频繁超时的放大因素。
 
@@ -142,6 +202,7 @@ ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 - 减少上传带宽（移动端尤其明显）
 
 ---
+
 ## v0.9 -- 视频理解管线重构（2026-08-01）
 
 **定位：** 让视频素材真正被 AI 理解并作为视频保存，而非拆成一堆照片卡片。核心改动：浏览器抽帧只作为 AI 视觉输入（不产生独立卡片），视频本体是主要素材并生成带播放器的视频卡片。
@@ -954,3 +1015,56 @@ uvicorn.run(app, host="127.0.0.1", port=8001)
 - 回忆挑战：间隔重复算法（1/3/7/14/30 天）
 - PWA 基础壳（manifest + service worker）
 - 种子数据：沪杭实践真实参访记录（7 站 14 张卡片）
+
+### P1（健壮性提升）
+
+#### 3. load_dotenv 不 override，进程残留空 Key 覆盖 .env
+
+**问题：** `load_dotenv()` 默认不覆盖进程已有环境变量。若启动 shell 中残留空的 `DASHSCOPE_API_KEY`（或从污染的环境继承），.env 中的正确值无法生效，服务器进程实际拿到空 Key，于是 `_has_dashscope_key()` 返回 False，直接走占位卡片——表现为"明明配了 Key 却不调用 AI"。
+
+**修改前：**
+```python
+# main.py — 默认不覆盖已有（可能为空的）环境变量
+load_dotenv()
+```
+
+**修改后：**
+```python
+# main.py — .env 始终覆盖进程中可能残留的空值
+load_dotenv(override=True)
+```
+
+**为什么这样改：** .env 是配置的唯一事实来源。若用户已在 .env 写入正确 Key，理应始终生效，不应被一个意外存在的空环境变量否决。
+
+**收益：**
+- 修正 .env 后重启即可生效，不再受进程残留环境干扰
+
+#### 4. 视频抽帧用全分辨率，放大超时与带宽风险
+
+**问题：** 浏览器抽帧时 `canvas` 直接设为 `video.videoWidth × video.videoHeight`，手机视频常为 1080p/4K。全分辨率帧体积大、视觉 API 处理慢，是视频路径频繁超时的放大因素。
+
+**修改前：**
+```javascript
+// app.js — 帧为原始分辨率
+canvas.width = video.videoWidth;
+canvas.height = video.videoHeight;
+ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+```
+
+**修改后：**
+```javascript
+// app.js — 缩放到最大 720px 宽，保持宽高比
+var maxW = 720;
+var scale = Math.min(1, maxW / video.videoWidth);
+canvas.width = Math.round(video.videoWidth * scale);
+canvas.height = Math.round(video.videoHeight * scale);
+ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+```
+
+**为什么这样改：** 视觉模型对缩略图的理解力足够（卡片只需标题/摘要/标签，无需像素级细节）。720px 在清晰度与处理速度间取得平衡，显著降低单帧体积和 API 耗时，配合 P0 的超时提升双保险。
+
+**收益：**
+- 视频帧体积大幅下降，视觉 API 响应更快、更稳定
+- 减少上传带宽（移动端尤其明显）
+
+
