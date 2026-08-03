@@ -459,7 +459,6 @@ def generate_narrative(cards, date_label):
     if not text:
         return None, False
     try:
-        result = _parse_json_key(text, "title")  # just to parse JSON
         raw = text.strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()

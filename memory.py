@@ -52,7 +52,6 @@ def init_db():
         "ALTER TABLE cards ADD COLUMN recall_seconds INTEGER DEFAULT 0",
         "ALTER TABLE ledger ADD COLUMN ai_seconds REAL DEFAULT 0",
         "ALTER TABLE ledger ADD COLUMN quick_mode INTEGER DEFAULT 0",
-        "ALTER TABLE ledger ADD COLUMN quick_mode INTEGER DEFAULT 0",  # idempotent guard
         "ALTER TABLE ai_connections ADD COLUMN locked INTEGER DEFAULT 0",
     ):
         try:
@@ -908,8 +907,8 @@ def rename_tag(old_tag, new_tag):
     u"""Rename a tag in all cards. new_tag='' removes the tag."""
     conn = get_db()
     rows = conn.execute(
-        "SELECT id, tags FROM cards WHERE status = 'confirmed' AND tags LIKE ?",
-        ("%%" + old_tag + "%%",),
+        "SELECT id, tags FROM cards WHERE status = 'confirmed' AND tags LIKE ? ESCAPE '\\'",
+        ("%" + old_tag.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%",),
     ).fetchall()
     updated = 0
     for r in rows:

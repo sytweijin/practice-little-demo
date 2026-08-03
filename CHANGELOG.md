@@ -1,3 +1,15 @@
+## v1.3.5 -- 全项目审查修复（2026-08-03）
+
+**定位：** 全项目代码审查后修复 5 个问题，涵盖安全（XSS）、数据正确性（LIKE 通配符）、数据冗余（CSV 导出）、代码清理。
+
+### 核心修复
+
+- **[P1] `cardHtml` 中 `image_url` 未转义（XSS 风险）：** 记忆卡片网格渲染时，`<video src>` 和 `<img src>` 直接拼接了原始 `image_url`，未经过 `escAttr`。导入恶意备份文件时可通过构造 `image_url` 注入 HTML 属性。现已统一使用 `escAttr` 转义，与 `mediaTag` 等其他渲染路径保持一致。
+- **[P1] `rename_tag` 未转义 LIKE 通配符：** 标签重命名/删除时用 `tags LIKE '%"tag"%'` 查找卡片，但没有转义 `%`、`_`、`\`。包含这些字符的标签（如 `100%`、`C++`、`v1.0_beta`）会匹配到不相关的卡片。现已像 `search_cards` 一样转义通配符并添加 `ESCAPE '\\'` 子句。
+- **[P2] CSV 导出 personal 字段重复：** `_export_csv` 中 Back 列已把 `personal` 拼入，同时 Personal 列又单独输出，导入 Anki 时卡片背面会重复显示。Back 列现在只保留 summary。
+- **[P2] `generate_narrative` 双重 JSON 解析：** 先调 `_parse_json_key(text, "title")` 做验证（返回值被丢弃），然后又手动重新解析。删除了冗余调用。
+- **[P3] `init_db` 重复迁移语句：** `ALTER TABLE ledger ADD COLUMN quick_mode` 列了两遍，删除冗余行。
+
 ## v1.3.4 -- 档案卡片计数实时同步（2026-08-03）
 
 **定位：** 删除、移动、编辑卡片后，档案下拉里的卡片张数不更新，始终停留在首次加载的旧数字。

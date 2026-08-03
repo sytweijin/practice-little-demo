@@ -443,10 +443,7 @@ def _export_csv(cards):
     w.writerow(["Front", "Back", "Tags", "Scene", "Date", "Personal"])
     for c in cards:
         front = c.get("title", "")
-        parts = [c.get("summary", "")]
-        if c.get("personal"):
-            parts.append(c["personal"])
-        back = "\n".join(parts)
+        back = c.get("summary", "")
         tags = " ".join(c.get("tags") or [])
         w.writerow([front, back, tags,
                     c.get("scene_type", ""),

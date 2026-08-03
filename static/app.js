@@ -724,7 +724,8 @@ function bindCardEvents(grid) {
 
 function cardHtml(c) {
   const sName = (scenarios.find(function(s) { return s.key === c.scene_type; }) || {}).name || c.scene_type;
-  let img = isVideoUrl(c.image_url) ? '<video class="mem-card-img" src="' + c.image_url + '" muted></video>' : (c.image_url ? '<img class="mem-card-img" src="' + c.image_url + '" alt="">' : "");
+  let safeUrl = escAttr(c.image_url || "");
+  let img = isVideoUrl(c.image_url) ? '<video class="mem-card-img" src="' + safeUrl + '" muted></video>' : (c.image_url ? '<img class="mem-card-img" src="' + safeUrl + '" alt="">' : "");
   let selCls = selectedIds[c.id] ? " selected" : "";
   let chk = batchMode ? '<span class="card-check' + (selectedIds[c.id] ? " on" : "") + '" data-id="' + c.id + '">✓</span>' : "";
   let recall = '<span class="recall-toggle mem-recall-toggle ' + (c.recall_enabled ? "on" : "") + '" data-id="' + c.id + '"><span class="recall-switch"></span><span>' + (c.recall_enabled ? ("复习 " + (c.recall_count || 0)) : "开启回忆") + '</span></span>';
