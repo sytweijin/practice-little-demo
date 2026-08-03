@@ -65,12 +65,47 @@ if(ab){var ac=ab.onclick;ab.onclick=function(){if(qm){var notes=document.getElem
 var vFiles=privacyOn?[]:selectedFiles.filter(function(f){return f.type.startsWith('video/')});
 var proceed=function(){for(var x=0;x<sendFiles.length;x++)fd.append('files',sendFiles[x]);for(var x=0;x<frameFiles.length;x++)fd.append('video_frames',frameFiles[x]);api('/api/analyze',{method:'POST',body:fd}).then(function(d){return Promise.all((d.cards||[]).map(function(c){return api('/api/cards/'+c.id+'/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})})).then(function(){alert(privacyOn?'隐私模式快速记录完成！已本地生成并自动保存'+(d.cards||[]).length+'张占位卡':'快速记录完成！已自动保存'+(d.cards||[]).length+'张卡片');selectedFiles=[];renderFileList();document.getElementById('notesInput').value='';document.getElementById('personalizationInput').value='';if(typeof refreshAll==='function'){refreshAll()}else{if(typeof loadCards==='function')loadCards();if(typeof loadLedger==='function')loadLedger();if(typeof loadRecall==='function')loadRecall();if(typeof loadGraph==='function')loadGraph()}})}).catch(function(e){alert('记录失败：'+e.message)}).finally(function(){ab.disabled=false;ab.textContent='生成记忆卡片→'})};
 if(vFiles.length){Promise.all(vFiles.map(function(vf){return extractVideoFrames(vf,3)})).then(function(all){all.forEach(function(fr){frameFiles=frameFiles.concat(fr)});proceed()}).catch(function(){proceed()})}else{proceed()}}else if(ac)ac()}}
-var gnBtn=document.getElementById('genNarrativeBtn'),nrEl=document.getElementById('narrativeResult');
+var gnBtn=document.getElementById('genNarrativeBtn'),mwBtn=document.getElementById('manualNarrativeBtn'),nrEl=document.getElementById('narrativeResult');
+var currentNarr=null;
 function renderNarrative(res){
+  currentNarr=res;
   if(!nrEl||!res){if(nrEl)nrEl.innerHTML='';return}
-  var ai=res.ai_used?'<span style="font-size:11px;color:var(--amber);margin-left:8px">✨AI生成</span>':'<span style="font-size:11px;color:var(--ink-faint);margin-left:8px">占位</span>';
-  nrEl.innerHTML='<div style="font-family:var(--serif);font-size:1.2rem;font-weight:600;margin-bottom:12px">'+esc(res.title)+ai+'</div><div style="white-space:pre-wrap;line-height:1.8;color:var(--ink-soft);font-size:14px">'+esc(res.body)+'</div><div style="margin-top:12px"><button class="btn-primary" id="narrDelBtn" style="width:auto;padding:6px 16px;background:var(--bg-card);color:var(--ink-faint);border:1px solid var(--line);font-size:12px">删除</button></div>';
-  var db=document.getElementById('narrDelBtn');if(db)db.onclick=function(){if(!confirm('确认删除这篇回顾？删除后需要重新生成。'))return;api('/api/narratives/'+res.id,{method:'DELETE'}).then(function(){nrEl.innerHTML='';alert('已删除')})}
+  var ai=res.ai_used?'<span style="font-size:11px;color:var(--amber);margin-left:8px">✨AI生成</span>':'<span style="font-size:11px;color:var(--teal);margin-left:8px">✍手写</span>';
+  nrEl.innerHTML='<div style="font-family:var(--serif);font-size:1.2rem;font-weight:600;margin-bottom:12px">'+esc(res.title)+ai+'</div>'+
+    '<div style="white-space:pre-wrap;line-height:1.8;color:var(--ink-soft);font-size:14px">'+esc(res.body)+'</div>'+
+    "<div class='modal-actions' style='margin-top:12px'>"+
+    "<button class='modal-btn' id='narrEditBtn' style='background:var(--amber);color:#fff;border-color:var(--amber)'>✎ 编辑</button>"+
+    "<button class='modal-btn' id='narrDelBtn'>删除</button></div>";
+  var eb=document.getElementById('narrEditBtn');if(eb)eb.onclick=function(){renderNarrativeEditor(res)};
+  var db=document.getElementById('narrDelBtn');if(db)db.onclick=function(){if(!confirm('确认删除这篇回顾？删除后需要重新生成。'))return;api('/api/narratives/'+res.id,{method:'DELETE'}).then(function(){currentNarr=null;nrEl.innerHTML='';alert('已删除')})}
+}
+function renderNarrativeEditor(res){
+  if(!nrEl)return;
+  var title=(res&&res.title)||'';
+  var body=(res&&res.body)||'';
+  var ny=td.getFullYear(),nm=td.getMonth();
+  var ms=ny+'-'+String(nm+1).padStart(2,'0');
+  nrEl.innerHTML=
+    "<input class='personalization-input' id='narrTitleInput' value='"+escAttr(title)+"' placeholder='标题（可选）' style='margin-bottom:8px'>"+
+    "<textarea class='personalization-input' id='narrBodyInput' placeholder='写下你对这个月的回顾...' style='width:100%;min-height:200px;line-height:1.8;resize:vertical'>"+esc(body)+"</textarea>"+
+    "<div class='modal-actions'>"+
+    "<button class='modal-btn' id='narrSaveBtn' style='background:var(--amber);color:#fff;border-color:var(--amber)'>保存</button>"+
+    "<button class='modal-btn' id='narrCancelBtn'>取消</button></div>";
+  var sb=document.getElementById('narrSaveBtn');
+  if(sb)sb.onclick=function(){
+    var t=document.getElementById('narrTitleInput').value.trim();
+    var b=document.getElementById('narrBodyInput').value.trim();
+    if(!b){alert('内容不能为空');return}
+    var hdrs={'Content-Type':'application/json'};
+    if(res&&res.id){
+      api('/api/narratives/'+res.id,{method:'PUT',headers:hdrs,body:JSON.stringify({title:t||'本月回顾',body:b})}).then(function(){loadNarrative()}).catch(function(e){alert('保存失败：'+e.message)})
+    }else{
+      api('/api/narratives',{method:'POST',headers:hdrs,body:JSON.stringify({title:t||'本月回顾',body:b,date_start:ms+'-01',date_end:ms+'-31'})}).then(function(){loadNarrative()}).catch(function(e){alert('保存失败：'+e.message)})
+    }
+  };
+  var cb=document.getElementById('narrCancelBtn');
+  if(cb)cb.onclick=function(){if(currentNarr)renderNarrative(currentNarr);else nrEl.innerHTML=''};
+  var bi=document.getElementById('narrBodyInput');if(bi)bi.focus();
 }
 function loadNarrative(){
   if(!nrEl)return;
@@ -81,7 +116,7 @@ function loadNarrative(){
     (d.narratives||[]).forEach(function(n){
       if(n.date_start&&n.date_start.slice(0,7)===ms)found=n;
     });
-    if(found)renderNarrative(found);else nrEl.innerHTML='';
+    if(found)renderNarrative(found);else{currentNarr=null;nrEl.innerHTML=''}
   }).catch(function(){});
 }
 if(gnBtn){gnBtn.onclick=function(){
@@ -95,6 +130,9 @@ if(gnBtn){gnBtn.onclick=function(){
   return r.json()}).then(function(res){
     if(nrEl){renderNarrative(res);if(res.used_fallback&&res.date_start){var fy=parseInt(res.date_start.slice(0,4),10),fm=parseInt(res.date_start.slice(5,7),10);td.setFullYear(fy,fm-1,1);if(typeof rt==='function')rt();loadNarrative();}}
   }).catch(function(e){alert('生成失败：'+e.message)}).finally(function(){gnBtn.disabled=false;gnBtn.textContent='✨ 生成本月回顾'})
+}};
+if(mwBtn){mwBtn.onclick=function(){
+  if(currentNarr){renderNarrativeEditor(currentNarr)}else{renderNarrativeEditor(null)}
 }};
 
 if(nrEl)loadNarrative();

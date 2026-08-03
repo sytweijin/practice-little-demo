@@ -190,8 +190,11 @@
       <div class="timeline-grid" id="timelineGrid"></div>
       <div style="margin-top:20px;padding:16px 20px;background:var(--bg-card);border:1px solid var(--line);border-radius:12px">
         <div class="section-label" style="margin-bottom:8px">记忆回顾</div>
-        <p style="font-size:13px;color:var(--ink-faint);margin-bottom:12px">AI 将当月的碎片织成一篇有主题的回顾文章，串联场景之间的深层联系。</p>
-        <button class="btn-primary" id="genNarrativeBtn" style="width:auto;padding:10px 24px;background:var(--teal);border-color:var(--teal)">✨ 生成本月回顾</button>
+        <p style="font-size:13px;color:var(--ink-faint);margin-bottom:12px">可以让 AI 把当月的记忆织成一篇回顾，也可以自己动笔写。写完随时编辑，AI 生成的也能改。</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn-primary" id="genNarrativeBtn" style="width:auto;padding:10px 24px;background:var(--teal);border-color:var(--teal)">✨ AI 生成本月回顾</button>
+          <button class="btn-primary" id="manualNarrativeBtn" style="width:auto;padding:10px 24px;background:var(--bg-card);color:var(--ink);border:1px solid var(--line)">✍ 自己写</button>
+        </div>
         <div id="narrativeResult" style="margin-top:16px"></div>
       </div>
       <div class="timeline-cards" id="timelineCards" style="margin-top:24px"></div>

@@ -688,6 +688,34 @@ def api_delete_narrative(nid: int):
     return {"ok": True}
 
 
+@app.post("/api/narratives")
+def api_save_narrative(data: dict):
+    """Manually write a narrative (no AI involved)."""
+    title = (data or {}).get("title", "").strip()
+    body = (data or {}).get("body", "").strip()
+    if not body:
+        raise HTTPException(400, "内容不能为空")
+    date_start = (data or {}).get("date_start")
+    date_end = (data or {}).get("date_end")
+    nid = memory.save_narrative(title or "本月回顾", body, date_start, date_end, ai_used=False)
+    return {"id": nid, "title": title or "本月回顾", "body": body, "ai_used": False,
+            "date_start": date_start, "date_end": date_end}
+
+
+@app.put("/api/narratives/{nid}")
+def api_update_narrative(nid: int, data: dict):
+    """Edit an existing narrative (manual or AI-generated)."""
+    title = (data or {}).get("title", "").strip()
+    body = (data or {}).get("body", "").strip()
+    if not body:
+        raise HTTPException(400, "内容不能为空")
+    existing = memory.get_narrative(nid)
+    if not existing:
+        raise HTTPException(404, "回顾不存在")
+    memory.update_narrative(nid, title or "本月回顾", body)
+    return {"ok": True}
+
+
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 

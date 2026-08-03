@@ -1103,7 +1103,22 @@ def delete_narrative(nid):
     conn.close()
 
 
-# ========== Full Snapshot Export / Smart Import ==========
+# ========== Narrative Editing ==========
+
+def update_narrative(nid, title, body):
+    conn = get_db()
+    r = conn.execute("SELECT id FROM narratives WHERE id = ?", (nid,)).fetchone()
+    if not r:
+        conn.close()
+        return False
+    conn.execute(
+        "UPDATE narratives SET title = ?, body = ? WHERE id = ?",
+        (title, body, nid),
+    )
+    conn.commit()
+    conn.close()
+    return True
+
 
 def export_full_snapshot():
     """Export ALL data: cards, narratives, ai_connections.
