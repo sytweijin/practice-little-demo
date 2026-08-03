@@ -1,13 +1,31 @@
+# ===== 敏感配置 / 密钥（绝不提交）=====
 .env
+.env.*
+!/.env.example
+
+# ===== 记忆库数据 —— 私人记忆，绝不提交 =====
+# 所有用户记忆都存在本地 SQLite，不属于源代码，永远不要上传
 data/*.db
 data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/*.sqlite
+data/*.sqlite3
+
+# 用户上传的图片 / 音视频（运行时产生，含个人信息）
 uploads/
+
+# Python
 __pycache__/
 *.pyc
 .venv/
 venv/
+
+# 系统 / 编辑器
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+
+# 证书（私钥）
 cert/

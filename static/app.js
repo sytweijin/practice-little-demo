@@ -94,9 +94,9 @@ function showNewScenarioModal() {
     '<input class="personalization-input" id="newSceneName" maxlength="40" placeholder="例如：读书笔记 / 家庭生活"></div>' +
     '<div class="modal-section"><div class="modal-section-label">图谱颜色</div>' +
     '<input type="color" id="newSceneColor" value="' + nextSceneAccent() + '" style="width:100%;height:40px;border:1px solid var(--line);border-radius:8px;background:var(--bg-card);padding:4px;cursor:pointer"></div>' +
-    '<div style="display:flex;gap:8px;margin-top:12px">' +
-    '<button class="btn-primary" id="newSceneOK" style="flex:1">创建</button>' +
-    '<button class="btn-primary" id="newSceneCancel" style="flex:0;background:var(--bg-card);color:var(--ink);border:1px solid var(--line)">取消</button>' +
+    '<div class="modal-actions">' +
+    '<button class="modal-btn" id="newSceneOK" style="background:var(--amber);color:#fff;border-color:var(--amber)">创建</button>' +
+    '<button class="modal-btn" id="newSceneCancel">取消</button>' +
     "</div></div>";
   document.getElementById("cardModal").classList.add("show");
   document.getElementById("newSceneOK").onclick = async () => {
@@ -125,10 +125,10 @@ function showEditScenarioModal(key) {
     '<input class="personalization-input" id="editSceneName" maxlength="40" value="' + escAttr(s.name) + '"></div>' +
     '<div class="modal-section"><div class="modal-section-label">图谱颜色</div>' +
     '<input type="color" id="editSceneColor" value="' + escAttr(s.accent || nextSceneAccent()) + '" style="width:100%;height:40px;border:1px solid var(--line);border-radius:8px;background:var(--bg-card);padding:4px;cursor:pointer"></div>' +
-    '<div style="display:flex;gap:8px;margin-top:12px">' +
-    '<button class="btn-primary" id="editSceneOK" style="flex:1">保存</button>' +
-    '<button class="btn-primary" id="editSceneDelete" style="flex:0;background:#7f1d1d;border-color:#7f1d1d;color:#fff">删除</button>' +
-    '<button class="btn-primary" id="editSceneCancel" style="flex:0;background:var(--bg-card);color:var(--ink);border:1px solid var(--line)">取消</button>' +
+    '<div class="modal-actions">' +
+    '<button class="modal-btn" id="editSceneOK" style="background:var(--amber);color:#fff;border-color:var(--amber)">保存</button>' +
+    '<button class="modal-btn modal-btn-danger" id="editSceneDelete">删除</button>' +
+    '<button class="modal-btn" id="editSceneCancel">取消</button>' +
     "</div></div>";
   document.getElementById("cardModal").classList.add("show");
   document.getElementById("editSceneOK").onclick = async () => {
@@ -766,9 +766,9 @@ function showRenameModal(fid) {
     "<div class='modal-title'>重命名文件夹</div>" +
     "<div class='modal-section'><div class='modal-section-label'>新名称</div>" +
     "<input class='personalization-input' id='renameInput' value='" + escAttr(cur) + "'></div>" +
-    "<div style='display:flex;gap:8px;margin-top:12px'>" +
-    "<button class='btn-primary' id='renameOK' style='flex:1'>确定</button>" +
-    "<button class='btn-primary' id='renameCancel' style='flex:0;background:var(--bg-card);color:var(--ink);border:1px solid var(--line)'>取消</button>" +
+    "<div class='modal-actions'>" +
+    "<button class='modal-btn' id='renameOK' style='background:var(--amber);color:#fff;border-color:var(--amber)'>确定</button>" +
+    "<button class='modal-btn' id='renameCancel'>取消</button>" +
     "</div></div>";
   document.getElementById("cardModal").classList.add("show");
   document.getElementById("renameOK").onclick = function() {
@@ -792,9 +792,9 @@ function showMergeModal(fid) {
     "<div class='modal-section'><div class='modal-section-label'>选择目标文件夹</div>" +
     "<select class='folder-pick' id='mergePick'>" + opts + "</select></div>" +
     "<p style='font-size:12px;color:var(--ink-faint);margin-top:4px'>当前文件夹中的卡片将全部移动到目标文件夹，当前文件夹将被删除。</p>" +
-    "<div style='display:flex;gap:8px;margin-top:12px'>" +
-    "<button class='btn-primary' id='mergeOK' style='flex:1'>确定合并</button>" +
-    "<button class='btn-primary' id='mergeCancel' style='flex:0;background:var(--bg-card);color:var(--ink);border:1px solid var(--line)'>取消</button>" +
+    "<div class='modal-actions'>" +
+    "<button class='modal-btn' id='mergeOK' style='background:var(--amber);color:#fff;border-color:var(--amber)'>确定合并</button>" +
+    "<button class='modal-btn' id='mergeCancel'>取消</button>" +
     "</div></div>";
   document.getElementById("cardModal").classList.add("show");
   document.getElementById("mergeOK").onclick = function() {
@@ -900,9 +900,9 @@ function showFolderPicker(title, optsHTML, callback) {
     '<div class="modal-body">' +
     '<div class="modal-title">' + esc(title) + '</div>' +
     '<select class="folder-pick" id="folderPick">' + optsHTML + '</select>' +
-    '<div style="display:flex;gap:8px;margin-top:8px">' +
-    '<button class="btn-primary" id="fpOK" style="flex:1">确定</button>' +
-    '<button class="btn-primary" id="fpCancel" style="flex:0;background:var(--bg-card);color:var(--ink);border:1px solid var(--line)">取消</button>' +
+    '<div class="modal-actions">' +
+    '<button class="modal-btn" id="fpOK" style="background:var(--amber);color:#fff;border-color:var(--amber)">确定</button>' +
+    '<button class="modal-btn" id="fpCancel">取消</button>' +
     '</div></div>';
   document.getElementById("cardModal").classList.add("show");
   document.getElementById("fpOK").onclick = function() { var v = document.getElementById("folderPick").value; closeModal(); callback(v); };
