@@ -52,7 +52,7 @@ async function api(path, opts = {}, skipJson) {
 }
 
 function refreshAll() {
-  return Promise.all([loadCards(), loadLedger(), loadRecall(), loadGraph()]);
+  return Promise.all([loadCards(), loadLedger(), loadRecall(), loadGraph(), loadProfiles()]);
 }
 
 // ---- Scenarios ----
